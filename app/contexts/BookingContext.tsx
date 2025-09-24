@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useReducer, useCallback } from "react"
+import React, { createContext, useContext, useReducer, useCallback, useMemo } from "react"
 import { BookingFormData, BookingContextType, BookingStep, BookingPricing, LineItem } from "@/app/types/booking"
 import { mockFrequencyOptions } from "@/app/lib/mockData"
 import { bookingDataService, PriceCalculationRequest, PriceCalculationResponse, PriceCalculationResult, QuestionData, Question } from "@/app/services/api/booking-data"
@@ -226,20 +226,6 @@ const processApiResponseToLineItems = (response: PriceCalculationResponse): Book
     type: 'service'
   });
 
-  // Calculate automatic adjustments (minimum fees, etc.)
-  const automaticAdjustment = finalAdjustedCost - baseCalculatedCost;
-  if (automaticAdjustment !== 0) {
-    lineItems.push({
-      id: 'automatic-adjustment',
-      name: automaticAdjustment > 0 ? 'Minimum Service Fee' : 'Service Discount',
-      description: automaticAdjustment > 0 ? 'Minimum service charge applied' : 'Automatic discount applied',
-      quantity: 1,
-      unitPrice: automaticAdjustment,
-      totalPrice: automaticAdjustment,
-      type: automaticAdjustment > 0 ? 'fee' : 'discount'
-    });
-  }
-
   // Add rate modifications as separate line items
   frequency.RateModifications.forEach(modification => {
     lineItems.push({
@@ -253,7 +239,7 @@ const processApiResponseToLineItems = (response: PriceCalculationResponse): Book
     });
   });
 
-  // Calculate discounts and fees from both automatic adjustments and rate modifications
+  // Calculate discounts and fees from rate modifications only
   const rateModDiscounts = frequency.RateModifications
     .filter(mod => mod.CalculatedCost < 0)
     .reduce((sum, mod) => sum + Math.abs(mod.CalculatedCost), 0);
@@ -261,10 +247,10 @@ const processApiResponseToLineItems = (response: PriceCalculationResponse): Book
   const rateModFees = frequency.RateModifications
     .filter(mod => mod.CalculatedCost > 0)
     .reduce((sum, mod) => sum + mod.CalculatedCost, 0);
-  
-  // Include automatic adjustments in fees/discounts
-  const totalDiscounts = rateModDiscounts + (automaticAdjustment < 0 ? Math.abs(automaticAdjustment) : 0);
-  const totalFees = rateModFees + (automaticAdjustment > 0 ? automaticAdjustment : 0);
+
+  // Use rate modification totals directly (no automatic adjustments)
+  const totalDiscounts = rateModDiscounts;
+  const totalFees = rateModFees;
 
   // Always calculate total from line items to ensure accuracy
   const calculatedTotal = lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
@@ -275,8 +261,8 @@ const processApiResponseToLineItems = (response: PriceCalculationResponse): Book
   const pricingResult = {
     lineItems,
     subtotal: baseCalculatedCost,           // Base calculation
-    discounts: totalDiscounts,              // All discounts
-    fees: totalFees,                        // All fees including automatic adjustments
+    discounts: totalDiscounts,              // All discounts from rate modifications
+    fees: totalFees,                        // All fees from rate modifications
     taxes: 0,                               // API doesn't include taxes separately
     total: finalTotalCost                   // Total calculated from sum of all line items
   };
@@ -472,7 +458,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.formData]) // Add dependency on formData to get fresh data
 
-  const contextValue: BookingContextType = {
+  const contextValue: BookingContextType = useMemo(() => ({
     formData: state.formData,
     updateFormData,
     currentStep: state.currentStep,
@@ -485,7 +471,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     setErrors,
     calculatePricing: calculatePricingCallback,
     calculatePricingAsync,
-  }
+  }), [state.formData, updateFormData, state.currentStep, setCurrentStep, state.steps, state.isLoading, setIsLoading, state.isPricingLoading, state.errors, setErrors, calculatePricingCallback, calculatePricingAsync])
 
   return (
     <BookingContext.Provider value={contextValue}>

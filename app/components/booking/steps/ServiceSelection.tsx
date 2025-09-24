@@ -1,22 +1,20 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, memo, useCallback } from "react"
 import { motion } from "framer-motion"
 import { Check, Star, Clock, Users } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
-import { Button } from "@/app/components/ui/button"
 import { Label } from "@/app/components/ui/label"
 import { cn, formatCurrency } from "@/app/lib/utils"
 import { useBooking } from "@/app/contexts/BookingContext"
 import { useBookingData } from "@/app/hooks/useBookingData"
 import { useAuth } from "@/app/components/booking/AuthenticationProvider"
-import { isMultiStepLayout } from "@/app/lib/config/env"
 import type { ScopeGroup, Scope } from "@/app/services/api/booking-data"
 
-export function ServiceSelection() {
+export const ServiceSelection = memo(function ServiceSelection() {
   const { token } = useAuth()
   const { scopeGroups, loading: servicesLoading, error: servicesError } = useBookingData(token)
-  const { formData, updateFormData, setCurrentStep } = useBooking()
+  const { formData, updateFormData } = useBooking()
   
   const [selectedScopeGroup, setSelectedScopeGroup] = useState<ScopeGroup | null>(
     formData.selectedScopeGroup || null
@@ -24,21 +22,21 @@ export function ServiceSelection() {
   const [selectedScope, setSelectedScope] = useState<Scope | null>(
     formData.selectedScope || null
   )
-  const handleScopeGroupSelect = (scopeGroup: ScopeGroup) => {
+  const handleScopeGroupSelect = useCallback((scopeGroup: ScopeGroup) => {
     setSelectedScopeGroup(scopeGroup)
     setSelectedScope(null)
     updateFormData({
       selectedScopeGroup: scopeGroup,
       selectedScope: null,
     })
-  }
+  }, [updateFormData])
 
-  const handleScopeSelect = (scope: Scope) => {
+  const handleScopeSelect = useCallback((scope: Scope) => {
     setSelectedScope(scope)
     updateFormData({
       selectedScope: scope,
     })
-  }
+  }, [updateFormData])
 
 
   // Helper function to check if a scope is a generic recurring service
@@ -56,20 +54,13 @@ export function ServiceSelection() {
     }
   }, [selectedScopeGroup])
 
-  const handleContinue = () => {
-    if (selectedScopeGroup && selectedScope) {
-      setCurrentStep(1)
-    }
-  }
-
-  const isComplete = selectedScopeGroup !== null && selectedScope !== null
 
   // Show loading state
   if (servicesLoading) {
     return (
       <div className="space-y-8">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Choose Your Service</h2>
+          <h2 className="text-[30px] font-bold text-gray-900 mb-2">Choose Your Service</h2>
           <p className="text-gray-600">Loading available services...</p>
         </div>
         <div className="flex justify-center p-8">
@@ -84,7 +75,7 @@ export function ServiceSelection() {
     return (
       <div className="space-y-8">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Choose Your Service</h2>
+          <h2 className="text-[30px] font-bold text-gray-900 mb-2">Choose Your Service</h2>
           <p className="text-red-600">Error loading services: {servicesError}</p>
         </div>
       </div>
@@ -99,7 +90,7 @@ export function ServiceSelection() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+        <h2 className="text-[30px] font-bold text-gray-900 mb-2">
           Choose Your Service
         </h2>
         <p className="text-gray-600">
@@ -217,21 +208,6 @@ export function ServiceSelection() {
         </CardContent>
       </Card>
 
-
-      {/* Continue Button - Only show in multi-step layout */}
-      {isMultiStepLayout() && (
-        <div className="flex justify-end">
-          <Button
-            onClick={handleContinue}
-            disabled={!isComplete}
-            variant="primary"
-            size="lg"
-            className="min-w-32"
-          >
-            Continue
-          </Button>
-        </div>
-      )}
     </div>
   )
-}
+})

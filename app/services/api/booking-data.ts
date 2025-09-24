@@ -3,6 +3,8 @@
  * Replaces mock data with real API calls
  */
 
+import { fetchMaidCentralAPI, parseAPIResponse } from './fetch-utils';
+
 // Real API response interfaces
 export interface Frequency {
   FrequencyId: string;
@@ -644,49 +646,62 @@ export class BookingDataService {
    * Get availability for a scope group within a date range
    */
   async getAvailability(
-    authToken: string, 
-    scopeGroupId: number, 
-    hours: number, 
-    startDate: string, 
+    authToken: string,
+    scopeGroupId: number,
+    hours: number,
+    startDate: string,
     endDate: string
   ): Promise<AvailabilityResponse> {
+    const serviceStart = performance.now()
+    console.log('🔧 SERVICE LAYER: getAvailability called')
+
     try {
-      
-      const headers = {
-        'Authorization': `Bearer ${authToken}`,
-        'Accept': 'application/json'
-      };
-      
+      console.time('📎 URL construction')
       const params = new URLSearchParams({
         scopeGroupId: scopeGroupId.toString(),
         hours: hours.toString(),
         startDate,
         endDate
       });
-      
-      const endpoint = `https://mccleaners.maidcentral.net/api/Lead/Availability?${params.toString()}`;
-      
-      const response = await fetch(endpoint, {
+      const endpoint = `/api/Lead/Availability?${params.toString()}`;
+      console.timeEnd('📎 URL construction')
+
+      console.log(`🚀 Fetching availability: ${endpoint}`);
+      console.log(`🔐 Token: ${authToken.substring(0, 20)}...`);
+
+      console.time('getAvailability');
+      console.time('🌍 fetchMaidCentralAPI')
+      const fetchStart = performance.now()
+
+      const response = await fetchMaidCentralAPI(endpoint, authToken, {
         method: 'GET',
-        headers,
-        credentials: 'omit'
+        timeout: 30000 // Increased timeout to 30 seconds
       });
-      
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Availability API failed with status ${response.status}`);
-      }
-      
-      const data: AvailabilityResponse = await response.json();
-      
+
+      const fetchEnd = performance.now()
+      console.timeEnd('🌍 fetchMaidCentralAPI')
+      console.log(`📊 fetchMaidCentralAPI took: ${(fetchEnd - fetchStart).toFixed(2)}ms`)
+
+      console.time('🔍 parseAPIResponse')
+      const parseStart = performance.now()
+      const data = await parseAPIResponse<AvailabilityResponse>(response, 'Availability');
+      const parseEnd = performance.now()
+      console.timeEnd('🔍 parseAPIResponse')
+      console.log(`📊 parseAPIResponse took: ${(parseEnd - parseStart).toFixed(2)}ms`)
+
+      console.timeEnd('getAvailability');
+      const serviceEnd = performance.now()
+      console.log(`📊 Total service layer: ${(serviceEnd - serviceStart).toFixed(2)}ms`)
+      console.log(`✅ Availability response received: ${data.Result?.length || 0} dates`);
+
       if (!data.IsSuccess) {
         throw new Error(`API returned error: ${data.Message || 'Unknown availability error'}`);
       }
-      
+
       return data;
-      
+
     } catch (error: any) {
+      console.error('❌ Availability API failed:', error.message);
       throw new Error(`Failed to fetch availability: ${error.message}`);
     }
   }

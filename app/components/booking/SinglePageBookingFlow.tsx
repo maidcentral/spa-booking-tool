@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useCallback } from "react"
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { BookingProvider, useBooking } from "@/app/contexts/BookingContext"
 import { AuthenticationProvider, useAuth } from "./AuthenticationProvider"
 import { BookingLayout } from "./BookingLayout"
@@ -12,14 +12,18 @@ import { Label } from "@/app/components/ui/label"
 import { Button } from "@/app/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/app/components/ui/select"
 import { MultiSelect } from "@/app/components/ui/multi-select"
-import { Calendar, MapPin, Clock, Check, Plus, Settings, User } from "lucide-react"
+import { Calendar, MapPin, Clock, Check, Plus, Settings, User, CreditCard } from "lucide-react"
 import { motion } from "framer-motion"
 import { bookingDataService, PostalCodeResult, RateModification, Frequency, QuestionData } from "@/app/services/api/booking-data"
 import { maidCentralApi } from "@/app/services/api/maidcentral"
-import { CustomerDetailsForm } from "./CustomerDetailsForm"
-import type { LeadCreateRequest } from "@/app/types/api"
+import { leadService } from "@/app/services/api/lead"
+import { bookQuoteService } from "@/app/services/api/bookquote"
+import { CustomerDetailsForm, CustomerDetailsFormRef } from "./CustomerDetailsForm"
+import { CardConnectTokenizer } from "./CardConnectTokenizer"
+import { BookingSuccessModal } from "./BookingSuccessModal"
+import type { LeadCreateRequest, QuoteCreateRequest, QuoteScopeOfWork, QuoteRateModification, QuoteQuestion } from "@/app/types/api/lead"
+import type { BookQuoteRequest, ScopeOfWork as BookQuoteScopeOfWork, RateModification as BookQuoteRateMod } from "@/app/types/api/bookquote"
 import { cn } from "@/app/lib/utils"
-import { debounce } from "lodash"
 
 /**
  * Section Divider Component
@@ -54,8 +58,8 @@ function SinglePageBookingContent() {
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [availabilityLoading, setAvailabilityLoading] = useState(false)
   const [availabilityError, setAvailabilityError] = useState("")
-  
-  const [selectedTime, setSelectedTime] = useState(formData.selectedTime || "")
+
+  const [selectedTime, setSelectedTime] = useState(formData.selectedTime || "08:00")
   
   // Customization state (same as BookingWidget)
   const [selectedFrequency, setSelectedFrequency] = useState<Frequency | null>(formData.selectedFrequency || null)
@@ -68,30 +72,68 @@ function SinglePageBookingContent() {
   const [customizationError, setCustomizationError] = useState("")
   const [questionsUnavailable, setQuestionsUnavailable] = useState(false)
 
-  // Customer details state
-  const [customerDetails, setCustomerDetails] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-  })
+  // Customer errors state (form data now managed in CustomerDetailsForm component)
   const [customerErrors, setCustomerErrors] = useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submissionError, setSubmissionError] = useState("")
-  const [bookingSuccess, setBookingSuccess] = useState(false)
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [bookedCustomerEmail, setBookedCustomerEmail] = useState("")
+
+  // Payment tokenization state
+  const [paymentToken, setPaymentToken] = useState<string | null>(null)
+  const [paymentExpiry, setPaymentExpiry] = useState<string | null>(null)
+  const [tokenizationError, setTokenizationError] = useState<string | null>(null)
+
+  // Lead creation state
+  const [leadId, setLeadId] = useState<number | null>(null)
+  const [leadCreationInProgress, setLeadCreationInProgress] = useState(false)
+  const [leadCreationAttempted, setLeadCreationAttempted] = useState(false)
+  const [quoteId, setQuoteId] = useState<string | null>(null)
+  const [isSaveButtonEnabled, setIsSaveButtonEnabled] = useState(false)
 
   // Section refs for scroll position tracking
   const serviceRef = useRef<HTMLDivElement>(null)
   const locationRef = useRef<HTMLDivElement>(null)
   const customizationRef = useRef<HTMLDivElement>(null)
   const customerRef = useRef<HTMLDivElement>(null)
+  const paymentRef = useRef<HTMLDivElement>(null)
 
-  // Load postal codes on mount
+  // Customer form ref for getting form data
+  const customerFormRef = useRef<CustomerDetailsFormRef>(null)
+
+  // Validation functions (moved early to fix declaration order)
+
+  const arePreviousSectionsComplete = useCallback(() => {
+    return (
+      formData.selectedScope !== null &&
+      formData.selectedScopeGroup !== null &&
+      validatedPostalCode !== null &&
+      selectedDate !== null &&
+      selectedFrequency !== null
+    )
+  }, [formData.selectedScope, formData.selectedScopeGroup, validatedPostalCode, selectedDate, selectedFrequency])
+
+  // Save button state calculation (now after validation functions)
+  const updateSaveButtonState = useCallback(() => {
+    const previousSectionsComplete = arePreviousSectionsComplete()
+    // Enable button when previous sections are complete and lead hasn't been created
+    // Customer details will be validated when button is clicked
+    const canSave = previousSectionsComplete && !leadCreationInProgress && !leadCreationAttempted
+    setIsSaveButtonEnabled(canSave)
+  }, [arePreviousSectionsComplete, leadCreationInProgress, leadCreationAttempted])
+
+  // Handle input blur to validate and update button state (now after updateSaveButtonState)
+  const handleInputBlur = useCallback(() => {
+    // Update save button state when user finishes with an input
+    updateSaveButtonState()
+  }, [updateSaveButtonState])
+
+  // Load postal codes on mount (only when token is available and codes not loaded)
   useEffect(() => {
     if (token && availablePostalCodes.length === 0) {
       loadPostalCodes()
     }
-  }, [token])
+  }, [token, availablePostalCodes.length]) // Include length to prevent unnecessary re-runs
 
   const loadPostalCodes = async () => {
     if (!token) return
@@ -108,13 +150,7 @@ function SinglePageBookingContent() {
     }
   }
 
-  // Debounced validation for real-time feedback
-  const debouncedValidatePostalCode = useCallback(
-    debounce(() => {
-      validatePostalCode()
-    }, 300),
-    [zipCode, availablePostalCodes]
-  )
+  // Removed debounced validation - now manual only
 
   const validatePostalCode = () => {
     const trimmedZip = zipCode.trim()
@@ -148,105 +184,217 @@ function SinglePageBookingContent() {
 
   const loadAvailability = async (postalCode: PostalCodeResult) => {
     if (!token || !formData.selectedScopeGroup) return
-    
+
     try {
       setAvailabilityLoading(true)
       setAvailabilityError("")
-      
+
       // Calculate date range (next 30 days)
       const startDate = new Date()
       const endDate = new Date()
       endDate.setDate(endDate.getDate() + 30)
-      
+
+      const startDateStr = startDate.toISOString().split('T')[0]
+      const endDateStr = endDate.toISOString().split('T')[0]
+      const scopeGroupId = formData.selectedScopeGroup.ScopeGroupId
+
+      console.log('\n🚫 AVAILABILITY API PERFORMANCE TEST')
+      console.log('=======================================')
+      console.log(`URL: https://mccleaners.maidcentral.net/api/Lead/Availability?scopeGroupId=${scopeGroupId}&hours=2&startDate=${startDateStr}&endDate=${endDateStr}`)
+
+      // TEST 1: Direct fetch (bypass all wrappers)
+      console.time('💬 DIRECT_FETCH')
+      const directStart = performance.now()
+      try {
+        const directResponse = await fetch(
+          `https://mccleaners.maidcentral.net/api/Lead/Availability?scopeGroupId=${scopeGroupId}&hours=2&startDate=${startDateStr}&endDate=${endDateStr}`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json'
+            }
+          }
+        )
+        const directEnd = performance.now()
+        console.timeEnd('💬 DIRECT_FETCH')
+        console.log(`📊 Direct fetch: ${(directEnd - directStart).toFixed(2)}ms`)
+
+        if (directResponse.ok) {
+          const directData = await directResponse.json()
+          if (directData.Result) {
+            setAvailableDates(directData.Result)
+            console.log(`✅ Direct fetch SUCCESS: ${directData.Result.length} dates`)
+            return // Exit early if direct fetch works
+          }
+        } else {
+          console.warn(`⚠️ Direct fetch failed: ${directResponse.status} ${directResponse.statusText}`)
+        }
+      } catch (directError) {
+        console.error('❌ Direct fetch error:', directError)
+      }
+
+      // TEST 2: Wrapped service call (fallback if direct fails)
+      console.time('🔄 WRAPPED_SERVICE')
+      const wrappedStart = performance.now()
       const response = await bookingDataService.getAvailability(
         token,
-        formData.selectedScopeGroup.ScopeGroupId,
-        2, // Default 2 hours duration
-        startDate.toISOString().split('T')[0],
-        endDate.toISOString().split('T')[0]
+        scopeGroupId,
+        2,
+        startDateStr,
+        endDateStr
       )
-      
-      if (response.Result) {
+      const wrappedEnd = performance.now()
+      console.timeEnd('🔄 WRAPPED_SERVICE')
+      console.log(`📊 Wrapped service: ${(wrappedEnd - wrappedStart).toFixed(2)}ms`)
+
+      if (response && response.Result) {
         setAvailableDates(response.Result)
+        console.log(`✅ Wrapped service SUCCESS: ${response.Result.length} dates`)
+      } else {
+        setAvailabilityError("No available dates found")
       }
+
     } catch (error: any) {
+      console.error('❌ Availability load error:', error)
       setAvailabilityError("Unable to load available dates. Please try again.")
     } finally {
       setAvailabilityLoading(false)
+      console.log('=======================================\n')
     }
   }
 
-  const handleDateSelect = (dateString: string) => {
+  // Generate time slots in 15-minute intervals
+  const generateTimeSlots = () => {
+    const slots = []
+    for (let hour = 8; hour < 18; hour++) { // 8 AM to 6 PM
+      for (let minute = 0; minute < 60; minute += 15) {
+        const time24 = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`
+        const period = hour >= 12 ? 'PM' : 'AM'
+        const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
+        const displayTime = `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`
+        slots.push({ value: time24, label: displayTime })
+      }
+    }
+    return slots
+  }
+
+  const handleDateSelect = useCallback((dateString: string) => {
     const date = new Date(dateString)
     setSelectedDate(date)
-    
-    // Extract time from the ISO string
-    const time = dateString.split('T')[1]?.substring(0, 5) || "09:00"
-    setSelectedTime(time)
-    
+
+    // Set default time when first selecting a date
+    if (!selectedTime) {
+      setSelectedTime("08:00") // Default to 8:00 AM
+    }
+
     updateFormData({
       selectedDate: date,
+      selectedTime: selectedTime || "08:00"
+    })
+  }, [selectedTime, updateFormData])
+
+  const handleTimeSelect = useCallback((time: string) => {
+    setSelectedTime(time)
+    updateFormData({
       selectedTime: time
     })
-  }
+  }, [updateFormData])
 
-  // Load customization data when service is selected
+  // Performance monitoring - track component renders (simplified)
+  const renderCountRef = useRef(0)
+  useEffect(() => {
+    renderCountRef.current += 1
+
+    // Only warn when thresholds are crossed to avoid log spam
+    if (renderCountRef.current === 10) {
+      console.log(`📊 ${renderCountRef.current} renders - Above ideal, monitoring...`)
+    } else if (renderCountRef.current === 20) {
+      console.warn(`⚠️ ${renderCountRef.current} renders - Performance concern`)
+    } else if (renderCountRef.current === 50) {
+      console.error(`❌ ${renderCountRef.current} renders - Render loop detected!`)
+    }
+  })
+
+  // Load customization data when service is selected (optimized dependencies)
   useEffect(() => {
     if (token && formData.selectedScopeGroup && formData.selectedScope) {
+      console.time('📦 Load customization data')
       loadCustomizationData()
     }
-  }, [token, formData.selectedScopeGroup, formData.selectedScope])
+  }, [token, formData.selectedScopeGroup?.ScopeGroupId, formData.selectedScope?.ScopeId]) // Only depend on IDs
 
   const loadCustomizationData = async () => {
     if (!token || !formData.selectedScopeGroup || !formData.selectedScope) return
-    
+
+    console.time('📦 CUSTOMIZATION_DATA_LOAD')
     try {
       setCustomizationLoading(true)
       setCustomizationError("")
+
+      console.time('💾 Customization state setup')
       
       // Clear any previously selected modifications when service changes
       setSelectedModifications({})
-      
+      console.timeEnd('💾 Customization state setup')
+
       // Load rate modifications first
+      console.time('⚙️ Rate modifications API')
       let rateModsResponse
       let nonPercentageModifications: any[] = []
       try {
         rateModsResponse = await bookingDataService.getRateModifications(token, formData.selectedScopeGroup.ScopeGroupId)
+        console.timeEnd('⚙️ Rate modifications API')
+        console.time('⚙️ Rate modifications processing')
         if (rateModsResponse.Result) {
-          
           // Store the full list for pricing calculation
           setAllRateModifications(rateModsResponse.Result)
-          
-          // Filter out percentage-based modifications AND discount items (negative cost) for UI display
+
+          // Filter: non-percentage, positive cost, and only "Cleaning Extras" type
           nonPercentageModifications = rateModsResponse.Result.filter(
-            rm => !rm.IsPercentage && rm.Cost >= 0
+            rm => !rm.IsPercentage &&
+                  rm.Cost >= 0 &&
+                  rm.RateModificationType === "Cleaning Extras"
           )
           setRateModifications(nonPercentageModifications)
-          
+          console.log('⚙️ Loaded', nonPercentageModifications.length, 'rate modifications')
         }
+        console.timeEnd('⚙️ Rate modifications processing')
       } catch (error) {
+        console.timeEnd('⚙️ Rate modifications API')
+        console.error('❌ Rate modifications failed:', error)
       }
       
       // Load questions separately with error handling
+      console.time('❓ Questions API')
       try {
         const questionsResponse = await bookingDataService.getQuestions(token, [formData.selectedScope.ScopeId])
+        console.timeEnd('❓ Questions API')
+        console.time('❓ Questions processing')
         
         if (questionsResponse.IsSuccess === false) {
           setQuestions([])
           setQuestionsUnavailable(true)
+          console.log('❓ Questions unavailable')
         } else if (questionsResponse.Result) {
           setQuestions(questionsResponse.Result)
           setQuestionsUnavailable(false)
+          console.log('❓ Loaded', questionsResponse.Result.length, 'questions')
         }
+        console.timeEnd('❓ Questions processing')
       } catch (error: any) {
+        console.timeEnd('❓ Questions API')
+        console.error('❌ Questions failed:', error)
         setQuestions([])
         setQuestionsUnavailable(true)
       }
       
       // Auto-select required modifications
+      console.time('⚙️ Auto-select required mods')
       if (nonPercentageModifications && nonPercentageModifications.length > 0) {
         const requiredMods = nonPercentageModifications.filter(rm => rm.IsRequired)
         if (requiredMods.length > 0) {
+          console.log('⚙️ Auto-selecting', requiredMods.length, 'required modifications')
           setSelectedModifications(prev => {
             const newSelectedMods = { ...prev }
             requiredMods.forEach(mod => {
@@ -256,54 +404,57 @@ function SinglePageBookingContent() {
           })
         }
       }
+      console.timeEnd('⚙️ Auto-select required mods')
       
     } catch (error: any) {
+      console.error('❌ Customization data load failed:', error)
       setCustomizationError("Unable to load customization options. Please try again.")
     } finally {
+      console.time('🏁 Customization cleanup')
       setCustomizationLoading(false)
+      console.timeEnd('🏁 Customization cleanup')
+      console.timeEnd('📦 CUSTOMIZATION_DATA_LOAD')
+      console.timeEnd('📦 Load customization data')
     }
   }
 
-  // Debounced pricing calculation for real-time updates
-  const debouncedCalculatePricing = useCallback(
-    debounce(async () => {
-      // Only calculate pricing if all required conditions are met
-      if (token && formData.selectedScopeGroup && formData.selectedScope && selectedFrequency) {
-        // Check if all required questions are answered
-        const requiredQuestions = questions.filter(q => q.IsRequired)
-        const hasAnsweredRequired = requiredQuestions.every(q => {
-          const answer = questionAnswers[q.QuestionId]
-          return answer && answer.toString().trim() !== ""
-        })
-        
-        if (hasAnsweredRequired) {
-          const currentWidgetState = {
-            selectedModifications,
-            questionAnswers,
-            rateModifications: allRateModifications // Use full list for pricing calculation
-          }
-          
-          
-          
-          await calculatePricingAsync(token, currentWidgetState)
-        }
-      }
-    }, 300),
-    [token, formData.selectedScopeGroup, formData.selectedScope, selectedFrequency, selectedModifications, questionAnswers, questions, allRateModifications]
-  )
+  // Removed automatic debounced pricing - now manual only
 
-  // Trigger pricing calculation on changes
-  useEffect(() => {
-    debouncedCalculatePricing()
-  }, [selectedFrequency, selectedModifications, questionAnswers, questions])
+  // Manual pricing calculation function (no automatic triggering)
+  const calculatePricing = useCallback(async () => {
+    if (!token || !formData.selectedScopeGroup || !formData.selectedScope || !selectedFrequency) {
+      console.warn('Cannot calculate pricing: Missing required data')
+      return
+    }
 
-  const handleFrequencySelect = async (frequency: Frequency) => {
+    // Check if all required questions are answered
+    const requiredQuestions = questions.filter(q => q.IsRequired)
+    const hasAnsweredRequired = requiredQuestions.every(q => {
+      const answer = questionAnswers[q.QuestionId]
+      return answer && answer.toString().trim() !== ""
+    })
+
+    if (!hasAnsweredRequired) {
+      console.warn('Cannot calculate pricing: Required questions not answered')
+      return
+    }
+
+    const currentWidgetState = {
+      selectedModifications,
+      questionAnswers,
+      rateModifications: allRateModifications
+    }
+
+    console.log('🧮 Calculating pricing manually...')
+    await calculatePricingAsync(token, currentWidgetState)
+  }, [token, formData.selectedScopeGroup, formData.selectedScope, selectedFrequency, questions, questionAnswers, selectedModifications, allRateModifications, calculatePricingAsync])
+
+  const handleFrequencySelect = useCallback(async (frequency: Frequency) => {
     setSelectedFrequency(frequency)
     updateFormData({ selectedFrequency: frequency })
-  }
+  }, [updateFormData])
 
-  const handleModificationToggle = (modId: number, quantity: number = 1) => {
-    
+  const handleModificationToggle = useCallback((modId: number, quantity: number = 1) => {
     setSelectedModifications(prev => {
       const newSelected = { ...prev }
       if (quantity > 0) {
@@ -311,72 +462,409 @@ function SinglePageBookingContent() {
       } else {
         delete newSelected[modId]
       }
-      
-      
       return newSelected
     })
-  }
+  }, [])
 
-  const handleQuestionAnswer = (questionId: number, answer: string) => {
+  const handleQuestionAnswer = useCallback((questionId: number, answer: string) => {
     setQuestionAnswers(prev => ({
       ...prev,
       [questionId]: answer
     }))
-  }
+  }, [])
 
-  const handleMultiSelectAnswer = (questionId: number, selectedValues: string[]) => {
+  const handleMultiSelectAnswer = useCallback((questionId: number, selectedValues: string[]) => {
     // Join multiple AnswerIds with comma for API format
     const answer = selectedValues.join(",")
     handleQuestionAnswer(questionId, answer)
-  }
+  }, [handleQuestionAnswer])
 
-  const handleCustomerFieldChange = (field: string, value: string) => {
-    if (field === "emailError") {
-      setCustomerErrors(prev => ({ ...prev, email: value }))
+  // Customer field change handling now managed internally by CustomerDetailsForm component
+
+
+
+  // Create or update lead when conditions are met
+  const createOrUpdateLead = async () => {
+    console.time('🎯 LEAD_CREATION_TOTAL')
+    console.time('⚡ State checks and setup')
+
+    // Don't create lead if already in progress or already created
+    if (leadCreationInProgress || leadCreationAttempted) {
+      console.timeEnd('⚡ State checks and setup')
+      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
       return
     }
-    
-    setCustomerDetails(prev => ({
-      ...prev,
-      [field]: value
-    }))
-    
-    // Clear field error when user starts typing
-    if (customerErrors[field]) {
-      setCustomerErrors(prev => {
-        const newErrors = { ...prev }
-        delete newErrors[field]
-        return newErrors
+
+    // Check if all required data from previous sections is present
+    // Customer details will be validated separately
+    if (!arePreviousSectionsComplete()) {
+      console.timeEnd('⚡ State checks and setup')
+      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
+      return
+    }
+
+    console.timeEnd('⚡ State checks and setup')
+    console.time('🔄 State updates')
+
+    setLeadCreationInProgress(true)
+    setLeadCreationAttempted(true)
+
+    console.timeEnd('🔄 State updates')
+    console.time('📦 Data preparation')
+
+    try {
+      // Get customer data from form ref
+      if (!customerFormRef.current) {
+        throw new Error('Customer form ref is not available')
+      }
+
+      const customerData = customerFormRef.current.getFormData()
+
+      // Build notes with service details
+      // Optimized lead payload - only essential fields for faster API response
+      const leadData: LeadCreateRequest = {
+        FirstName: customerData.firstName.trim(),
+        LastName: customerData.lastName.trim(),
+        Email: customerData.email.trim(),
+        Phone: customerData.phone.replace(/\D/g, ''),
+        PostalCode: validatedPostalCode?.PostalCode || zipCode
+      }
+
+      console.timeEnd('📦 Data preparation')
+      console.log('🔍 Lead payload size:', JSON.stringify(leadData).length, 'bytes')
+      console.log('📤 Sending lead data:', JSON.stringify(leadData, null, 2))
+      console.log('🔐 Token length:', token?.length || 0, 'chars')
+
+      console.time('🌐 LEAD_API_CALL')
+      const apiCallStart = performance.now()
+
+      const response = await leadService.createOrUpdate(token, leadData)
+
+      const apiCallEnd = performance.now()
+      console.timeEnd('🌐 LEAD_API_CALL')
+      console.log(`📊 Lead API took: ${(apiCallEnd - apiCallStart).toFixed(2)}ms`)
+      console.log('📥 Lead API full response:', response)
+
+      console.time('🔍 Response processing')
+
+      // Check for the Result object which contains the LeadId
+      if (response.IsSuccess && response.Result && response.Result.LeadId) {
+        const leadId = response.Result.LeadId
+
+        console.time('💾 Lead state updates')
+        setLeadId(leadId)
+        updateFormData({ leadId })
+        console.timeEnd('💾 Lead state updates')
+
+        console.timeEnd('🔍 Response processing')
+        console.log('✅ Lead created successfully with ID:', leadId)
+
+        // Now create the quote with all booking details
+        await createQuoteForLead(leadId, customerData)
+      } else if (response.LeadId) {
+        // Fallback for direct LeadId in response
+        console.time('💾 Lead state updates (fallback)')
+        setLeadId(response.LeadId)
+        updateFormData({ leadId: response.LeadId })
+        console.timeEnd('💾 Lead state updates (fallback)')
+        console.timeEnd('🔍 Response processing')
+
+        console.log('✅ Lead created successfully with ID:', response.LeadId)
+        await createQuoteForLead(response.LeadId, customerData)
+      } else {
+        console.timeEnd('🔍 Response processing')
+        console.error('❌ Lead creation failed:', {
+          errorMessage: response.Message || response.ErrorMessage,
+          fullResponse: response,
+          leadData: leadData
+        })
+      }
+    } catch (error) {
+      console.error('❌ Exception in createOrUpdateLead:', error)
+      console.error('🚨 Error details:', {
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
       })
+    } finally {
+      console.time('🏁 Final state cleanup')
+      setLeadCreationInProgress(false)
+      console.timeEnd('🏁 Final state cleanup')
+      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
     }
   }
 
-  const validateCustomerDetails = () => {
-    const errors: Record<string, string> = {}
-    
-    if (!customerDetails.firstName.trim()) {
-      errors.firstName = "First name is required"
+  // Create quote after lead is created
+  const createQuoteForLead = async (leadId: number, customerData: any) => {
+    console.time('💼 QUOTE_CREATION_TOTAL')
+    console.log('=== STARTING QUOTE CREATION ===')
+    console.log('Lead ID:', leadId)
+    console.log('Token available:', !!token)
+    console.time('📋 Quote state logging')
+    console.log('Current state at quote creation:', {
+      selectedScope: formData.selectedScope,
+      selectedScopeGroup: formData.selectedScopeGroup,
+      selectedFrequency,
+      selectedModifications,
+      questionAnswers,
+      allRateModifications: allRateModifications?.length || 0,
+      customerData,
+      validatedPostalCode
+    })
+    console.timeEnd('📋 Quote state logging')
+
+    console.time('✅ Quote validation')
+
+    // Early validation
+    if (!formData.selectedScope || !formData.selectedScopeGroup) {
+      console.timeEnd('✅ Quote validation')
+      console.timeEnd('💼 QUOTE_CREATION_TOTAL')
+      console.error('❌ Cannot create quote: Missing scope or scope group', {
+        scope: formData.selectedScope,
+        scopeGroup: formData.selectedScopeGroup
+      })
+      return
     }
-    
-    if (!customerDetails.lastName.trim()) {
-      errors.lastName = "Last name is required"
+
+    if (!selectedFrequency) {
+      console.timeEnd('✅ Quote validation')
+      console.timeEnd('💼 QUOTE_CREATION_TOTAL')
+      console.error('❌ Cannot create quote: Missing frequency')
+      return
     }
-    
-    if (!customerDetails.email.trim()) {
-      errors.email = "Email is required"
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerDetails.email)) {
-      errors.email = "Please enter a valid email address"
+
+    console.timeEnd('✅ Quote validation')
+
+    try {
+      console.log('✅ Starting to build quote data...')
+      // Build rate modifications for the quote
+      const rateModifications: QuoteRateModification[] = Object.entries(selectedModifications)
+        .filter(([_, quantity]) => quantity > 0)
+        .map(([modId, quantity]) => {
+          const modIdInt = parseInt(modId)
+          const rateMod = allRateModifications.find(rm => rm.RateModificationId === modIdInt)
+
+          // Check if this modification should be recurring
+          const isFrequencyRecurring = selectedFrequency?.FrequencyId !== 'S'
+          const isModificationRecurring = rateMod?.IsRecurring === true
+
+          return {
+            Quantity: quantity,
+            RateModificationId: modIdInt,
+            IsRecurring: isFrequencyRecurring && isModificationRecurring
+          }
+        })
+
+      // Build questions array
+      const quoteQuestions: QuoteQuestion[] = Object.entries(questionAnswers)
+        .filter(([_, answer]) => answer && answer.trim() !== '')
+        .map(([questionId, answer]) => ({
+          QuestionId: parseInt(questionId),
+          Answer: answer
+        }))
+
+      // Build scope of work - this is REQUIRED
+      const scopesOfWork: QuoteScopeOfWork[] = []
+      scopesOfWork.push({
+        ScopeOfWorkId: formData.selectedScope.ScopeId,
+        FrequencyId: selectedFrequency.FrequencyId,
+        RateModifications: rateModifications
+      })
+      console.log('✅ Scopes of work built:', JSON.stringify(scopesOfWork, null, 2))
+
+      const quoteData: QuoteCreateRequest = {
+        LeadId: leadId,
+        HomeAddress1: customerData.address1.trim() || 'Not provided',
+        HomeAddress2: customerData.address2.trim(),
+        HomeCity: customerData.city.trim() || 'Not provided',
+        HomeRegion: customerData.state.trim() || 'NA',
+        HomePostalCode: validatedPostalCode?.PostalCode || zipCode || '00000',
+        BillingAddress1: customerData.address1.trim() || 'Not provided',
+        BillingAddress2: customerData.address2.trim(),
+        BillingCity: customerData.city.trim() || 'Not provided',
+        BillingRegion: customerData.state.trim() || 'NA',
+        BillingPostalCode: validatedPostalCode?.PostalCode || zipCode || '00000',
+        SendQuoteEmail: false,
+        AddToCampaigns: true,
+        TriggerWebhook: true,
+        ScopeGroupId: formData.selectedScopeGroup?.ScopeGroupId || 0,
+        ScopesOfWork: scopesOfWork,
+        Questions: quoteQuestions,
+        // Include payment token for PCI compliance
+        PaymentToken: paymentToken || undefined,
+        PaymentExpiry: paymentExpiry || undefined
+      }
+
+      console.log('✅ Quote data prepared:', JSON.stringify(quoteData, null, 2))
+
+      console.log('🔄 Calling createOrUpdateQuote API...')
+
+      if (!token) {
+        console.error('❌ No token available for quote creation!')
+        return
+      }
+
+      const quoteResponse = await leadService.createOrUpdateQuote(token, quoteData)
+      console.log('📥 Quote API response:', quoteResponse)
+
+      // Check for the Result object which contains the QuoteId
+      if (quoteResponse.IsSuccess && quoteResponse.Result && quoteResponse.Result.QuoteId) {
+        const quoteId = quoteResponse.Result.QuoteId
+        setQuoteId(quoteId)
+        updateFormData({ quoteId })
+        console.log('✅ Quote created successfully with ID:', quoteId)
+        console.log('🎉 Both Lead and Quote created successfully!')
+        console.log('Lead ID:', leadId, 'Quote ID:', quoteId)
+      } else if (quoteResponse.QuoteId) {
+        // Fallback for direct QuoteId in response
+        setQuoteId(quoteResponse.QuoteId)
+        updateFormData({ quoteId: quoteResponse.QuoteId })
+        console.log('✅ Quote created successfully with ID:', quoteResponse.QuoteId)
+      } else {
+        console.warn('⚠️ Quote creation response without QuoteId:', quoteResponse)
+      }
+    } catch (error) {
+      console.error('❌ CRITICAL ERROR in createQuoteForLead:', error)
+      console.error('Error occurred during:', {
+        phase: 'data_preparation_or_api_call',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        leadId,
+        hasToken: !!token,
+        hasScope: !!formData.selectedScope,
+        hasFrequency: !!selectedFrequency
+      })
+      // Don't throw - let the lead creation succeed even if quote fails
     }
-    
-    if (!customerDetails.phone.trim()) {
-      errors.phone = "Phone number is required"
-    } else if (customerDetails.phone.replace(/\D/g, "").length !== 10) {
-      errors.phone = "Please enter a valid 10-digit phone number"
-    }
-    
-    setCustomerErrors(errors)
-    return Object.keys(errors).length === 0
   }
+
+  // Manual save handler for lead and quote creation
+  const handleSaveContactInfo = async () => {
+    console.time('🕐 TOTAL_CONTACT_SAVE_TIME')
+    console.time('⏱️ Pre-validation checks')
+
+    // Validate that previous sections are complete
+    if (!arePreviousSectionsComplete()) {
+      console.timeEnd('⏱️ Pre-validation checks')
+      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
+      return
+    }
+
+    // Validate customer details (will show errors if incomplete)
+    if (!validateCustomerDetails()) {
+      console.timeEnd('⏱️ Pre-validation checks')
+      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
+      return
+    }
+
+    // Don't save if already in progress or already saved
+    if (leadCreationInProgress || leadCreationAttempted) {
+      console.timeEnd('⏱️ Pre-validation checks')
+      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
+      return
+    }
+
+    console.timeEnd('⏱️ Pre-validation checks')
+    console.log('🚀 Starting lead creation process...')
+
+    // Call lead creation directly and await it
+    try {
+      await createOrUpdateLead()
+      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
+      console.log(`✅ Contact save process completed (${renderCountRef.current} total renders)`)
+    } catch (error) {
+      console.error('❌ Lead creation failed:', error)
+      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
+      setSubmissionError('Failed to save contact information. Please try again.')
+      setLeadCreationInProgress(false)
+    }
+
+    // Reset render count for next interaction
+    if (renderCountRef.current > 15) {
+      console.warn(`⚠️ High render count detected: ${renderCountRef.current} - Consider further optimization`)
+    } else {
+      console.log(`✅ Render performance: GOOD (${renderCountRef.current} renders)`)
+    }
+
+    // Print performance summary
+    console.log(`
+
+📊 PERFORMANCE SUMMARY:
+====================================
+Render Count: ${renderCountRef.current} (Target: <15)
+
+If you see timing over 2000ms, check these areas:
+1. 🌐 API calls (should be <3000ms each)
+2. 📦 Data preparation (should be <100ms)
+3. 🔄 State updates (should be <50ms)
+4. 🔍 Validation (should be <50ms)
+
+🚀 BUTTON-BASED VALIDATION IMPLEMENTED:
+- Removed automatic pricing calculations
+- Removed real-time zip code validation
+- Added manual "Calculate Pricing" button
+- Added manual "Validate Location" button
+- Converted to explicit user-triggered actions
+- Eliminated continuous re-render triggers
+
+🎯 TARGET: Minimal renders (only on user button clicks)
+====================================\n\n`)
+  }
+
+
+  // Only update save button state when key sections change (not every field)
+  useEffect(() => {
+    updateSaveButtonState()
+  }, [updateSaveButtonState, formData.selectedScope, formData.selectedScopeGroup, validatedPostalCode, selectedDate, selectedFrequency])
+
+  const validateCustomerDetails = useCallback(() => {
+    console.time('🔍 Customer validation')
+
+    if (!customerFormRef.current) {
+      console.timeEnd('🔍 Customer validation')
+      console.log('🎯 Validation result: FORM_REF_NOT_AVAILABLE')
+      return false
+    }
+
+    const validation = customerFormRef.current.validateForm()
+
+    console.time('💾 Validation state update')
+    setCustomerErrors(validation.errors)
+    console.timeEnd('💾 Validation state update')
+
+    console.timeEnd('🔍 Customer validation')
+    console.log('🎯 Validation result:', validation.isValid ? 'VALID' : `ERRORS: ${Object.keys(validation.errors).join(', ')}`)
+    return validation.isValid
+  }, [])
+
+  // Payment tokenization handlers
+  const handleTokenReceived = useCallback((token: string, expiry: string) => {
+    setPaymentToken(token)
+    setPaymentExpiry(expiry)
+    setTokenizationError(null)
+
+    // Store in form data as well
+    updateFormData({
+      payment: {
+        ...formData.payment,
+        paymentToken: token,
+        paymentExpiry: expiry
+      }
+    })
+
+    console.log("Payment token received successfully", {
+      tokenLength: token.length,
+      expiry: expiry,
+      timestamp: new Date().toISOString()
+    })
+  }, [formData.payment, updateFormData])
+
+  const handleTokenizationError = useCallback((error: string) => {
+    setPaymentToken(null)
+    setPaymentExpiry(null)
+    setTokenizationError(error)
+    console.error("Payment tokenization error:", error)
+  }, [])
 
   const isFormComplete = () => {
     // Check all required fields
@@ -384,21 +872,28 @@ function SinglePageBookingContent() {
     const hasLocation = validatedPostalCode !== null
     const hasSchedule = selectedDate !== null && selectedTime !== ""
     const hasFrequency = selectedFrequency !== null
-    
+
     // Check required questions
     const requiredQuestions = questions.filter(q => q.IsRequired)
     const hasAnsweredRequired = requiredQuestions.every(q => {
       const answer = questionAnswers[q.QuestionId]
       return answer && answer.toString().trim() !== ""
     })
-    
+
     // Check customer details
-    const hasCustomerDetails = customerDetails.firstName !== "" && 
-                                customerDetails.lastName !== "" && 
-                                customerDetails.email !== "" && 
-                                customerDetails.phone !== ""
-    
-    return hasService && hasLocation && hasSchedule && hasFrequency && hasAnsweredRequired
+    let hasCustomerDetails = false
+    if (customerFormRef.current) {
+      const customerData = customerFormRef.current.getFormData()
+      hasCustomerDetails = customerData.firstName !== "" &&
+                          customerData.lastName !== "" &&
+                          customerData.email !== "" &&
+                          customerData.phone !== ""
+    }
+
+    // Check payment token
+    const hasPaymentToken = paymentToken !== null && paymentExpiry !== null
+
+    return hasService && hasLocation && hasSchedule && hasFrequency && hasAnsweredRequired && hasCustomerDetails && hasPaymentToken
   }
 
   const handleBookNow = async () => {
@@ -408,7 +903,15 @@ function SinglePageBookingContent() {
       customerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
-    
+
+    // Then validate payment token
+    if (!paymentToken || !paymentExpiry) {
+      // Scroll to payment section
+      paymentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setSubmissionError("Please complete the payment information")
+      return
+    }
+
     if (!isFormComplete()) {
       // Find first incomplete section and scroll to it
       if (!formData.selectedScope) {
@@ -420,36 +923,141 @@ function SinglePageBookingContent() {
       }
       return
     }
-    
+
     setIsSubmitting(true)
     setSubmissionError("")
-    
+
     try {
-      // Prepare the lead creation request
-      const leadRequest: LeadCreateRequest = {
-        SendLeadEmail: false,
-        TriggerWebhook: false,
-        FirstName: customerDetails.firstName.trim(),
-        LastName: customerDetails.lastName.trim(),
-        Email: customerDetails.email.trim(),
-        Phone: customerDetails.phone.trim(),
-        PostalCode: validatedPostalCode?.PostalCode || zipCode
+      let finalLeadId = leadId
+      let finalQuoteId = quoteId
+
+      // If we don't have a leadId yet, create the lead first
+      if (!finalLeadId) {
+        console.log('Creating lead first...')
+        await handleSaveClick()
+
+        // Wait a bit for state to update
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        // Now we should have leadId and quoteId from the save operation
+        // But we need to use the state values that will be set
+        // For now, we'll need to return and let user click again
+        if (!leadId || !quoteId) {
+          console.error('Lead or Quote creation failed')
+          setSubmissionError('Please save your information first before booking')
+          return
+        }
+
+        finalLeadId = leadId
+        finalQuoteId = quoteId
       }
-      
-      
-      // Call the API to create the lead
-      const leadResponse = await maidCentralApi.createOrUpdateLead(leadRequest as any)
-      
-      
-      // Show success state
-      setBookingSuccess(true)
-      
-      // Optionally scroll to top to show success message
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-      
+
+      if (!finalLeadId || !finalQuoteId) {
+        console.error('Missing lead or quote ID')
+        setSubmissionError('Please save your information first before booking')
+        return
+      }
+
+      // Get customer data from form ref for booking
+      if (!customerFormRef.current) {
+        setSubmissionError('Customer form is not available')
+        return
+      }
+
+      const customerData = customerFormRef.current.getFormData()
+
+      // Build the scopes of work for the booking
+      const scopesOfWork: BookQuoteScopeOfWork[] = []
+
+      if (formData.selectedScope && selectedFrequency && selectedDate && selectedTime) {
+        // Format the date and time for FirstJobDate
+        const jobDate = new Date(selectedDate)
+        const [hours, minutes] = selectedTime.split(':')
+        jobDate.setHours(parseInt(hours), parseInt(minutes), 0, 0)
+        const firstJobDate = jobDate.toISOString().replace('T', ' ').substring(0, 16)
+
+        // Build rate modifications for booking
+        const bookingRateMods: BookQuoteRateMod[] = Object.entries(selectedModifications)
+          .filter(([_, quantity]) => quantity > 0)
+          .map(([modId, quantity]) => {
+            const modIdInt = parseInt(modId)
+            const rateMod = allRateModifications.find(rm => rm.RateModificationId === modIdInt)
+
+            const isFrequencyRecurring = selectedFrequency.FrequencyId !== 'S'
+            const isModificationRecurring = rateMod?.IsRecurring === true
+
+            return {
+              RateModificationId: modIdInt,
+              Quantity: quantity,
+              IsRecurring: isFrequencyRecurring && isModificationRecurring
+            }
+          })
+
+        // Get the base fee from pricing or use a default
+        const baseFee = formData.pricing?.subtotal || 250
+
+        scopesOfWork.push({
+          ScopeOfWorkId: formData.selectedScope.ScopeId,
+          FrequencyId: selectedFrequency.FrequencyId,
+          FirstJobDate: firstJobDate,
+          BaseFee: baseFee,
+          RateModifications: bookingRateMods.length > 0 ? bookingRateMods : undefined
+        })
+      }
+
+      // Prepare the booking request
+      const bookingRequest: BookQuoteRequest = {
+        SendBookedEmail: false,
+        SendCustomerPortalInvite: false,
+        TriggerWebhook: false,
+        LeadId: finalLeadId,
+        QuoteId: finalQuoteId,
+        Expiry: paymentExpiry,
+        Token: paymentToken,
+        ScopeGroupId: formData.selectedScopeGroup?.ScopeGroupId || 6,
+        ScopesOfWork: scopesOfWork,
+
+        // Home/Service Address (required)
+        HomeAddress1: customerData.address1,
+        HomeAddress2: customerData.address2 || undefined,
+        HomeCity: customerData.city,
+        HomeRegion: customerData.state,
+        HomePostalCode: validatedPostalCode?.PostalCode || zipCode,
+
+        // Billing Address (required) - Use same as service address by default
+        CustomerBillingAddress1: customerData.address1,
+        CustomerBillingAddress2: customerData.address2 || undefined,
+        CustomerBillingCity: customerData.city,
+        CustomerBillingRegion: customerData.state,
+        CustomerBillingPostalCode: validatedPostalCode?.PostalCode || zipCode
+      }
+
+      console.log('Sending booking request:', JSON.stringify(bookingRequest, null, 2))
+
+      // Call the booking API
+      const bookingResponse = await bookQuoteService.bookQuote(token!, bookingRequest)
+
+      console.log('Booking response:', bookingResponse)
+
+      if (bookingResponse.success) {
+        // Update form data with booking information
+        updateFormData({
+          leadId: finalLeadId,
+          quoteId: finalQuoteId,
+          scopeGroupId: formData.selectedScopeGroup?.ScopeGroupId
+        })
+
+        // Show success modal
+        setBookedCustomerEmail(customerData.email)
+        setShowSuccessModal(true)
+      } else {
+        throw new Error(bookingResponse.error || 'Booking failed')
+      }
+
     } catch (error: any) {
-      setSubmissionError(error.message || 'Failed to submit booking. Please try again.')
-      
+      console.error('Booking error:', error)
+      setSubmissionError(error.message || 'Failed to complete booking. Please try again.')
+
       // Scroll to customer section to show error
       customerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } finally {
@@ -458,6 +1066,7 @@ function SinglePageBookingContent() {
   }
 
   return (
+    <>
     <BookingLayout
       pricing={formData.pricing}
       selectedService={formData.selectedScope?.Name}
@@ -471,18 +1080,18 @@ function SinglePageBookingContent() {
         className="space-y-0 overflow-y-auto"
       >
         {/* Section 1: Service Selection */}
-        <div ref={serviceRef} data-testid="section-service" className="py-6">
+        <div ref={serviceRef} data-testid="section-service" className="py-3 sm:py-6">
           <ServiceSelection />
         </div>
 
         <SectionDivider />
 
         {/* Section 2: Customization - Moved up to get service details early for accurate pricing */}
-        <div ref={customizationRef} data-testid="section-customization" className="py-6">
-          <div className="space-y-8">
+        <div ref={customizationRef} data-testid="section-customization" className="py-3 sm:py-6">
+          <div className="space-y-4 sm:space-y-8">
             {/* Header */}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">
                 Customize Your Service
               </h2>
               <p className="text-gray-600">
@@ -511,7 +1120,7 @@ function SinglePageBookingContent() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                       {(formData.selectedScope?.Frequencies || []).map((frequency, index) => (
                         <motion.button
                           key={frequency.FrequencyId}
@@ -569,7 +1178,7 @@ function SinglePageBookingContent() {
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
                           {rateModifications.map((modification) => {
                             const isSelected = selectedModifications[modification.RateModificationId] > 0
                             const isRequired = modification.IsRequired
@@ -644,7 +1253,7 @@ function SinglePageBookingContent() {
                             </p>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-6">
                           {questions.map((question) => (
                             <div key={question.QuestionId}>
                               <Label className={cn(
@@ -736,6 +1345,31 @@ function SinglePageBookingContent() {
                           ))}
                           </div>
                         )}
+
+                        {/* Calculate Pricing Button */}
+                        <div className="pt-2 sm:pt-4 border-t border-gray-200 mt-3 sm:mt-6">
+                          <Button
+                            onClick={calculatePricing}
+                            disabled={!formData.selectedScope || !selectedFrequency || isPricingLoading}
+                            className="w-full sm:w-auto min-w-[200px]"
+                            size="lg"
+                          >
+                            {isPricingLoading ? (
+                              <>
+                                <motion.div
+                                  animate={{ rotate: 360 }}
+                                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                  className="w-4 h-4 mr-2"
+                                >
+                                  ⚙️
+                                </motion.div>
+                                Calculating...
+                              </>
+                            ) : (
+                              "🧮 Calculate Pricing"
+                            )}
+                          </Button>
+                        </div>
                       </CardContent>
                     </Card>
                   </motion.div>
@@ -748,11 +1382,11 @@ function SinglePageBookingContent() {
         <SectionDivider />
 
         {/* Section 3: Location & Schedule */}
-        <div ref={locationRef} data-testid="section-location" className="py-6">
-          <div className="space-y-8">
+        <div ref={locationRef} data-testid="section-location" className="py-3 sm:py-6">
+          <div className="space-y-4 sm:space-y-8">
             {/* Header */}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">
                 Location & Schedule
               </h2>
               <p className="text-gray-600">
@@ -773,16 +1407,13 @@ function SinglePageBookingContent() {
                   <Label htmlFor="zipCode" variant="required">
                     Postal Code
                   </Label>
-                  <div className="flex gap-3 mt-2">
+                  <div className="flex gap-2 sm:gap-3 mt-1 sm:mt-2">
                     <Input
                       id="zipCode"
                       type="text"
                       value={zipCode}
-                      onChange={(e) => {
-                        setZipCode(e.target.value)
-                        debouncedValidatePostalCode()
-                      }}
-                      onBlur={validatePostalCode}
+                      onChange={(e) => setZipCode(e.target.value)} // No automatic validation
+                      onBlur={() => {}} // Remove automatic validation on blur
                       placeholder="Enter postal code"
                       className={cn(
                         "max-w-xs",
@@ -832,7 +1463,7 @@ function SinglePageBookingContent() {
                       Select Date & Time
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-2 sm:space-y-4">
                     {availabilityLoading ? (
                       <div className="flex justify-center p-8">
                         <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
@@ -844,7 +1475,7 @@ function SinglePageBookingContent() {
                     ) : availableDates.length > 0 ? (
                       <div>
                         <Label>Available Dates</Label>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 mt-1 sm:mt-2">
                           {availableDates.slice(0, 9).map((dateString) => {
                             const date = new Date(dateString)
                             const isSelected = selectedDate?.toISOString() === date.toISOString()
@@ -880,17 +1511,39 @@ function SinglePageBookingContent() {
                           <motion.div
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="mt-4 p-3 bg-blue-50 rounded-lg"
-                          >
-                            <div className="flex items-center gap-2 text-blue-700">
-                              <Clock className="w-4 h-4" />
-                              <span className="text-sm font-medium">
-                                Selected: {selectedDate.toLocaleDateString('en-US', {
-                                  weekday: 'long',
-                                  month: 'long',
-                                  day: 'numeric'
-                                })} at {selectedTime || "9:00 AM"}
-                              </span>
+                            className="mt-3 sm:mt-6 space-y-2 sm:space-y-4">
+                            {/* Time Selection */}
+                            <div>
+                              <Label htmlFor="timeSlot">Select Time</Label>
+                              <Select
+                                value={selectedTime}
+                                onValueChange={handleTimeSelect}
+                              >
+                                <SelectTrigger id="timeSlot" className="w-full sm:w-64 mt-2">
+                                  <SelectValue placeholder="Choose a time" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {generateTimeSlots().map((slot) => (
+                                    <SelectItem key={slot.value} value={slot.value}>
+                                      {slot.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            {/* Selected Date & Time Summary */}
+                            <div className="p-3 bg-blue-50 rounded-lg">
+                              <div className="flex items-center gap-2 text-blue-700">
+                                <Clock className="w-4 h-4" />
+                                <span className="text-sm font-medium">
+                                  Selected: {selectedDate.toLocaleDateString('en-US', {
+                                    weekday: 'long',
+                                    month: 'long',
+                                    day: 'numeric'
+                                  })} at {generateTimeSlots().find(s => s.value === selectedTime)?.label || "9:00 AM"}
+                                </span>
+                              </div>
                             </div>
                           </motion.div>
                         )}
@@ -908,11 +1561,11 @@ function SinglePageBookingContent() {
         <SectionDivider />
 
         {/* Section 4: Customer Details */}
-        <div ref={customerRef} data-testid="section-customer" className="py-6">
-          <div className="space-y-8">
+        <div ref={customerRef} data-testid="section-customer" className="py-3 sm:py-6">
+          <div className="space-y-4 sm:space-y-8">
             {/* Header */}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">
                 Customer Details
               </h2>
               <p className="text-gray-600">
@@ -922,96 +1575,205 @@ function SinglePageBookingContent() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <User className="w-5 h-5" />
-                  Contact Information
+                <CardTitle className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <User className="w-5 h-5" />
+                    Contact Information
+                  </div>
+                  {leadId && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="flex items-center gap-1 text-xs text-green-600 font-normal"
+                    >
+                      <Check className="w-3 h-3" />
+                      Saved
+                    </motion.div>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 {submissionError && (
-                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <div className="mb-3 sm:mb-6 p-2 sm:p-4 bg-red-50 border border-red-200 rounded-lg">
                     <p className="text-red-800">{submissionError}</p>
                   </div>
                 )}
                 
-                {bookingSuccess ? (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="py-8 text-center"
-                  >
-                    <div className="mb-4">
-                      <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-                        <Check className="w-8 h-8 text-green-600" />
-                      </div>
+                <div className="space-y-3 sm:space-y-6">
+                    <CustomerDetailsForm
+                      ref={customerFormRef}
+                      initialValues={{
+                        firstName: "",
+                        lastName: "",
+                        email: "",
+                        phone: "",
+                        address1: "",
+                        address2: "",
+                        city: "",
+                        state: "",
+                      }}
+                      postalCode={validatedPostalCode?.PostalCode || zipCode}
+                      errors={customerErrors}
+                      disabled={isSubmitting}
+                    />
+
+                    {/* Save Contact Information Button */}
+                    <div className="pt-2 sm:pt-4 border-t border-gray-200">
+                      <Button
+                        onClick={handleSaveContactInfo}
+                        disabled={!isSaveButtonEnabled || leadCreationInProgress}
+                        className="w-full sm:w-auto min-w-[200px]"
+                        size="lg"
+                      >
+                        {leadCreationInProgress ? (
+                          <>
+                            <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2" />
+                            Saving Information...
+                          </>
+                        ) : leadId ? (
+                          <>
+                            <Check className="w-4 h-4 mr-2" />
+                            Information Saved
+                          </>
+                        ) : (
+                          'Save Contact Information'
+                        )}
+                      </Button>
+
+                      {!isSaveButtonEnabled && !leadCreationAttempted && (
+                        <p className="text-sm text-gray-500 mt-2">
+                          Complete all previous sections and contact details to save
+                        </p>
+                      )}
+
+                      {leadId && quoteId && (
+                        <motion.p
+                          initial={{ opacity: 0, y: 5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="text-sm text-green-600 mt-2 flex items-center gap-1"
+                        >
+                          <Check className="w-3 h-3" />
+                          Contact information and service details saved successfully
+                        </motion.p>
+                      )}
                     </div>
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                      Booking Request Submitted!
-                    </h3>
-                    <p className="text-gray-600">
-                      Thank you for your booking request. We'll contact you shortly to confirm your service.
-                    </p>
-                    <p className="text-sm text-gray-500 mt-4">
-                      A confirmation email has been sent to {customerDetails.email}
-                    </p>
-                  </motion.div>
-                ) : (
-                  <CustomerDetailsForm
-                    firstName={customerDetails.firstName}
-                    lastName={customerDetails.lastName}
-                    email={customerDetails.email}
-                    phone={customerDetails.phone}
-                    postalCode={validatedPostalCode?.PostalCode || zipCode}
-                    onFieldChange={handleCustomerFieldChange}
-                    errors={customerErrors}
-                    disabled={isSubmitting}
-                  />
-                )}
+                  </div>
               </CardContent>
             </Card>
           </div>
         </div>
 
-        {/* Final Submit Section with Pricing and Button */}
-        {!bookingSuccess && (
-          <>
-            {/* Mobile Pricing Summary - Show before Book Now button */}
-            <div className="lg:hidden mt-8">
-              <PricingSummary
-                pricing={formData.pricing}
-                selectedService={formData.selectedScope?.Name}
-                selectedDate={formData.selectedDate}
-                selectedTime={formData.selectedTime}
-                zipCode={formData.zipCode}
-                isSticky={false}
-                isPricingLoading={isPricingLoading}
-              />
+        <SectionDivider />
+
+        {/* Section 5: Payment Information */}
+        <div ref={paymentRef} data-testid="section-payment" className="py-3 sm:py-6">
+          <div className="space-y-4 sm:space-y-8">
+            {/* Header */}
+            <div>
+              <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">
+                Payment Information
+              </h2>
+              <p className="text-gray-600">
+                Secure payment processing with CardConnect
+              </p>
             </div>
 
-            <div className="py-8 mt-12 border-t border-gray-200">
-              <div className="flex justify-end">
-              <Button
-                onClick={handleBookNow}
-                disabled={!isFormComplete() || isSubmitting}
-                variant="primary"
-                size="lg"
-                className="min-w-48"
-              >
-                {isSubmitting ? (
-                  <span className="flex items-center gap-2">
-                    <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                    Submitting...
-                  </span>
-                ) : (
-                  "Book Now"
-                )}
-              </Button>
-            </div>
+            {/* Payment Token Status */}
+            {paymentToken && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-green-600" />
+                  <p className="text-sm text-green-800">
+                    Payment information secured successfully
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Tokenization Error */}
+            {tokenizationError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-700">{tokenizationError}</p>
+              </div>
+            )}
+
+            {/* CardConnect Tokenizer */}
+            <CardConnectTokenizer
+              onTokenReceived={handleTokenReceived}
+              onError={handleTokenizationError}
+              disabled={isSubmitting}
+            />
           </div>
-          </>
-        )}
+        </div>
+
+        {/* Final Submit Section with Pricing and Button */}
+        {/* Mobile Pricing Summary - Show before Book Now button */}
+        <div className="lg:hidden mt-8">
+          <PricingSummary
+            pricing={formData.pricing}
+            selectedService={formData.selectedScope?.Name}
+            selectedDate={formData.selectedDate}
+            selectedTime={formData.selectedTime}
+            zipCode={formData.zipCode}
+            isSticky={false}
+            isPricingLoading={isPricingLoading}
+          />
+        </div>
+
+        <div className="py-8 mt-12 border-t border-gray-200">
+          <div className="flex flex-col items-end gap-2">
+            {/* Show save status if needed */}
+            {!leadId && !quoteId && isFormComplete() && (
+              <p className="text-sm text-amber-600">
+                Please save your information first before booking
+              </p>
+            )}
+
+            {leadId && quoteId && (
+              <p className="text-sm text-green-600">
+                ✓ Information saved. Ready to book!
+              </p>
+            )}
+
+            <Button
+              onClick={handleBookNow}
+              disabled={!isFormComplete() || isSubmitting || (!leadId && leadCreationInProgress)}
+              variant="primary"
+              size="lg"
+              className="min-w-48"
+            >
+              {isSubmitting ? (
+                <span className="flex items-center gap-2">
+                  <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  Booking...
+                </span>
+              ) : leadCreationInProgress ? (
+                <span className="flex items-center gap-2">
+                  <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  Saving...
+                </span>
+              ) : (
+                "Book Now"
+              )}
+            </Button>
+          </div>
+        </div>
       </div>
     </BookingLayout>
+
+    {/* Success Modal */}
+    <BookingSuccessModal
+      isOpen={showSuccessModal}
+      onClose={() => setShowSuccessModal(false)}
+      customerEmail={bookedCustomerEmail}
+      leadId={leadId}
+      quoteId={quoteId}
+      selectedService={formData.selectedScope?.Name}
+      selectedDate={selectedDate}
+      selectedTime={selectedTime}
+      zipCode={zipCode}
+    />
+    </>
   )
 }
 

@@ -28,14 +28,23 @@
   }
 }
 
+html {
+  font-family: 'Poppins', Arial, Helvetica, sans-serif !important;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  font-family: 'Poppins', Arial, Helvetica, sans-serif !important;
 }
 
 * {
-  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  font-family: 'Poppins', Arial, Helvetica, sans-serif !important;
+}
+
+/* Force Poppins on all common elements */
+h1, h2, h3, h4, h5, h6, p, span, div, button, input, select, textarea, label {
+  font-family: 'Poppins', Arial, Helvetica, sans-serif !important;
 }
 
 /* Line clamp utility for text truncation */

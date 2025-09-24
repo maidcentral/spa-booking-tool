@@ -23,7 +23,7 @@ export function middleware(request: NextRequest) {
       "img-src 'self' data: https:",
       "connect-src 'self' https://api.maidcentral.net https://mccleaners.maidcentral.net" + (isDevelopment ? " ws: wss: http://localhost:* https://localhost:*" : ""), // Allow MaidCentral API and dev server connections
       "frame-ancestors " + (isDevelopment ? "*" : "*"), // Allow embedding in any iframe (required for partner sites)
-      "frame-src 'none'", // This app doesn't embed other frames
+      "frame-src 'self' https://fts-uat.cardconnect.com https://fts.cardconnect.com", // Allow CardConnect payment iframes
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'"

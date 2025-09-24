@@ -23,6 +23,7 @@ const nextConfig = {
               "font-src 'self' fonts.gstatic.com",
               "img-src 'self' data: blob:",
               "connect-src 'self' ws: wss: https://api.maidcentral.net https://mccleaners.maidcentral.net", // Allow MaidCentral API
+              "frame-src 'self' https://fts-uat.cardconnect.com https://fts.cardconnect.com", // Allow CardConnect iFrames
               "frame-ancestors 'self' *", // Allow iframe embedding
             ].join('; '),
           },

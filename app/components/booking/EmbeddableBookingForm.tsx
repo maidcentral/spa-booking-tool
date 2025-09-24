@@ -1,8 +1,8 @@
 "use client"
 
 import React from "react"
-import { BookingFlowWrapper } from "./BookingFlowWrapper"
+import { SinglePageBookingFlow } from "./SinglePageBookingFlow"
 
 export function EmbeddableBookingForm() {
-  return <BookingFlowWrapper />
+  return <SinglePageBookingFlow />
 }

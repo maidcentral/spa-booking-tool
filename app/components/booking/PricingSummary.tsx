@@ -1,6 +1,6 @@
 "use client"
 
-import React from "react"
+import React, { memo } from "react"
 import { motion } from "framer-motion"
 import { ShoppingCart, Clock, MapPin, Calendar } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
@@ -19,7 +19,7 @@ interface PricingSummaryProps {
   isPricingLoading?: boolean
 }
 
-export function PricingSummary({
+export const PricingSummary = memo(function PricingSummary({
   pricing,
   selectedService,
   selectedDate,
@@ -207,4 +207,4 @@ export function PricingSummary({
       </div>
     </div>
   )
-}
+})

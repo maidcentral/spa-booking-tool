@@ -142,7 +142,7 @@ export interface BookingFormData {
     }
     specialInstructions?: string
   }
-  
+
   // Payment
   payment: {
     method: "card" | "paypal" | "bank"
@@ -153,8 +153,15 @@ export interface BookingFormData {
       state?: string
       zipCode?: string
     }
+    paymentToken?: string
+    paymentExpiry?: string
   }
-  
+
+  // Booking Data
+  leadId?: number
+  quoteId?: string
+  scopeGroupId?: number
+
   // Pricing
   pricing: BookingPricing
 }
