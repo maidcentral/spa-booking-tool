@@ -21,9 +21,6 @@ A GitHub-cloneable Next.js booking form that integrates with the MaidCentral API
    # MaidCentral API Configuration
    API_USERNAME=your_maidcentral_email_api_username
    API_KEY=your_maidcentral_api_key
-
-   # Layout Configuration (optional)
-   NEXT_PUBLIC_MULTI_STEP_LAYOUT=true
    ```
 
    **Important:** Never commit your `.env.local` file to version control. Add it to your `.gitignore`.
