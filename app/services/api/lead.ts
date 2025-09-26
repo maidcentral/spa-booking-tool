@@ -35,15 +35,7 @@ export const leadService = {
         ...data
       }
 
-      console.log('🚀 Creating/Updating Lead...');
-      console.time('createOrUpdateLead');
-      console.time('🔐 Request serialization');
       const serializedData = JSON.stringify(requestData);
-      console.timeEnd('🔐 Request serialization');
-      console.log('📊 Request payload size:', serializedData.length, 'bytes');
-
-      console.time('🌐 Network request');
-      const networkStart = performance.now();
 
       const response = await fetchMaidCentralAPI('/api/Lead/CreateOrUpdate', token, {
         method: 'POST',
@@ -51,31 +43,11 @@ export const leadService = {
         timeout: 15000 // 15 second timeout for lead creation
       });
 
-      const networkEnd = performance.now();
-      console.timeEnd('🌐 Network request');
-      console.log(`📊 Network took: ${(networkEnd - networkStart).toFixed(2)}ms`);
-      console.log('🗺 Response status:', response.status, response.statusText);
-      console.log('📏 Response headers:', Object.fromEntries(response.headers.entries()));
-
-      console.time('🔍 Response parsing');
       const responseData = await parseAPIResponse<LeadCreateResponse>(response, 'Lead CreateOrUpdate');
-      console.timeEnd('🔍 Response parsing');
-
-      console.timeEnd('createOrUpdateLead');
-      console.log('✅ Lead API response received:', {
-        isSuccess: responseData.IsSuccess,
-        leadId: responseData.Result?.LeadId
-      });
-
-      // Check if the API returned a success flag
-      if (responseData.IsSuccess === false) {
-        console.warn('⚠️ Lead API returned failure:', responseData);
-      }
 
       return responseData;
 
     } catch (error: any) {
-      console.error('❌ Lead creation failed:', error.message);
 
       // Return error response
       return {
@@ -117,7 +89,7 @@ export const leadService = {
       return data;
 
     } catch (error) {
-      console.error('Failed to fetch customer sources:', error);
+      // Failed to fetch customer sources
       return [];
     }
   },
@@ -155,7 +127,7 @@ export const leadService = {
       return data.filter(tag => tag.CategoryId === 8);
 
     } catch (error) {
-      console.error('Failed to fetch lead tags:', error);
+      // Failed to fetch lead tags
       return [];
     }
   },
@@ -168,8 +140,7 @@ export const leadService = {
    */
   async createOrUpdateQuote(token: string, data: QuoteCreateRequest): Promise<QuoteCreateResponse> {
     console.time('createOrUpdateQuote');
-    console.log('📝 createOrUpdateQuote called with token:', token ? 'present' : 'missing');
-    console.log('📦 Quote request data size:', JSON.stringify(data).length, 'bytes');
+    // Creating or updating quote
 
     try {
       if (!token) {
@@ -184,7 +155,7 @@ export const leadService = {
         ...data
       };
 
-      console.log('📋 Final request data being sent:', JSON.stringify(requestData, null, 2));
+      // Preparing quote request
 
       console.time('🌐 Quote API call');
       const apiStart = performance.now();
@@ -199,20 +170,19 @@ export const leadService = {
 
       const apiEnd = performance.now();
       console.timeEnd('🌐 Quote API call');
-      console.log(`📊 Quote API took: ${(apiEnd - apiStart).toFixed(2)}ms`);
-      console.log('📬 Quote API response status:', response.status);
+      // Quote API call completed
 
       console.time('🔍 Response parsing');
       const responseData = await parseAPIResponse<QuoteCreateResponse>(response, 'Quote CreateOrUpdate');
       console.timeEnd('🔍 Response parsing');
 
       console.timeEnd('createOrUpdateQuote');
-      console.log('✅ Quote API response received:', responseData);
+      // Quote API response received
       return responseData;
 
     } catch (error: any) {
-      console.error('Exception in createOrUpdateQuote:', error);
-      console.error('Error details:', {
+      // Exception in createOrUpdateQuote
+      console.error('Exception in createOrUpdateQuote', {
         message: error.message,
         stack: error.stack
       });

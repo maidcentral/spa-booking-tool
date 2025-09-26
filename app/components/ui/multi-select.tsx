@@ -22,6 +22,7 @@ interface MultiSelectProps {
   onChange: (selected: string[]) => void
   placeholder?: string
   className?: string
+  isRequired?: boolean
 }
 
 export function MultiSelect({
@@ -30,6 +31,7 @@ export function MultiSelect({
   onChange,
   placeholder = "Select items...",
   className,
+  isRequired = false,
 }: MultiSelectProps) {
   const [open, setOpen] = React.useState(false)
 
@@ -55,15 +57,29 @@ export function MultiSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className={cn("w-full justify-between min-h-[40px]", className)}
+          className={cn(
+            // Match SelectTrigger styling exactly but allow height growth
+            "flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+            // Dynamic theming with CSS custom properties (same as Select)
+            "bg-[var(--foreground-color)] border-[var(--text-color)]/50 text-[var(--text-color)]",
+            "focus:border-[var(--primary-color)] focus:ring-[var(--primary-color)]/20 transition-all duration-200",
+            "min-h-[40px] h-auto py-2", // Auto height with minimum and consistent padding
+            isRequired && "!bg-white !border-red-200 !text-gray-900",
+            className
+          )}
+          style={isRequired ? {
+            backgroundColor: '#ffffff',
+            borderColor: '#fecaca',
+            color: '#111827'
+          } : undefined}
         >
-          <div className="flex gap-1 flex-wrap">
+          <div className="flex-1 flex gap-1 flex-wrap items-center justify-start">
             {selectedOptions.length > 0 ? (
               selectedOptions.map((option) => (
                 <Badge
                   variant="secondary"
                   key={option.value}
-                  className="mr-1 mb-1"
+                  className="h-6 text-xs flex items-center justify-center"
                   onClick={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
@@ -81,30 +97,46 @@ export function MultiSelect({
           <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
-        <div className="max-h-60 overflow-auto">
+      <PopoverContent className={cn(
+        // Match SelectContent styling exactly
+        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border shadow-md",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+        // Dynamic theming (same as Select)
+        "bg-[var(--foreground-color)] border-[var(--text-color)]/50 text-[var(--text-color)] shadow-lg",
+        "w-[var(--radix-popover-trigger-width)] p-0",
+        isRequired && "!bg-white !border-gray-200 !text-gray-900"
+      )}
+      style={isRequired ? {
+        backgroundColor: '#ffffff',
+        borderColor: '#e5e7eb',
+        color: '#111827'
+      } : undefined}>
+        <div className="p-1 max-h-60 overflow-auto">
           {options.map((option) => (
             <div
               key={option.value}
               className={cn(
-                "flex items-center space-x-2 p-2 hover:bg-accent hover:text-accent-foreground cursor-pointer",
-                selected.includes(option.value) && "bg-accent"
+                // Match SelectItem styling exactly
+                "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none",
+                "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+                // Dynamic theming with CSS custom properties (same as Select)
+                isRequired
+                  ? "!text-gray-900 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100"
+                  : "text-[var(--text-color)] hover:bg-[var(--primary-color)]/20 focus:bg-[var(--primary-color)]/20",
+                selected.includes(option.value) && (isRequired ? "!bg-gray-100" : "bg-[var(--primary-color)]/20")
               )}
               onClick={() => handleSelect(option.value)}
             >
-              <div
-                className={cn(
-                  "flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
-                  selected.includes(option.value)
-                    ? "bg-primary text-primary-foreground"
-                    : "opacity-50"
-                )}
-              >
+              <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
                 {selected.includes(option.value) && (
-                  <Check className="h-3 w-3" />
+                  <Check className="h-4 w-4 text-[var(--primary-color)]" />
                 )}
-              </div>
-              <span className="flex-1">{option.label}</span>
+              </span>
+              <span className={cn(
+                "flex-1",
+                isRequired ? "!text-gray-900" : "text-[var(--text-color)]"
+              )}>{option.label}</span>
             </div>
           ))}
         </div>

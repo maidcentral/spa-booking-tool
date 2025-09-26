@@ -62,10 +62,7 @@ export async function fetchWithTimeout(
 
     clearTimeout(timeoutId);
 
-    // Log slow responses for debugging
-    if (performance.now() > 1000) {
-      console.warn(`Slow API response: ${method} ${url}`);
-    }
+    // Check for slow responses (but don't log in production)
 
     return response;
 
@@ -79,7 +76,6 @@ export async function fetchWithTimeout(
 
     // Retry logic for network errors (not for 4xx/5xx)
     if (retries > 0 && (error.name === 'TypeError' || error.name === 'NetworkError')) {
-      console.warn(`Retrying request (${retries} attempts left): ${method} ${url}`);
       await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
       return fetchWithTimeout(url, { ...options, retries: retries - 1 });
     }
@@ -100,29 +96,13 @@ export async function fetchMaidCentralAPI(
 ): Promise<Response> {
   const { additionalHeaders = {}, ...fetchOptions } = options;
 
-  // Log token validation
-  console.log('🔐 Auth token validation:', {
-    tokenProvided: !!authToken,
-    tokenLength: authToken?.length || 0,
-    tokenPrefix: authToken ? authToken.substring(0, 20) + '...' : 'none',
-    endpoint
-  });
-
   const headers = {
     'Authorization': `Bearer ${authToken}`,
     'Accept': 'application/json',
     ...additionalHeaders
   };
 
-  console.log('🔍 Request headers:', {
-    ...headers,
-    Authorization: headers.Authorization ? headers.Authorization.substring(0, 30) + '...' : 'none'
-  });
-
   const fullUrl = `https://mccleaners.maidcentral.net${endpoint}`
-  console.log(`💬 FETCH_UTILS: Calling ${fullUrl}`)
-  console.time('🌐 fetchWithTimeout')
-  const fetchUtilsStart = performance.now()
 
   const result = await fetchWithTimeout(
     fullUrl,
@@ -134,9 +114,7 @@ export async function fetchMaidCentralAPI(
     }
   );
 
-  const fetchUtilsEnd = performance.now()
-  console.timeEnd('🌐 fetchWithTimeout')
-  console.log(`📊 fetchWithTimeout took: ${(fetchUtilsEnd - fetchUtilsStart).toFixed(2)}ms`)
+  // Request completed successfully
 
   return result;
 }

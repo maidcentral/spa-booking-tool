@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { BookingProvider, useBooking } from "@/app/contexts/BookingContext"
-import { AuthenticationProvider, useAuth } from "./AuthenticationProvider"
+import { useAuth } from "./AuthenticationProvider"
 import { BookingLayout } from "./BookingLayout"
 import { PricingSummary } from "./PricingSummary"
 import { ServiceSelection } from "./steps/ServiceSelection"
@@ -78,6 +78,14 @@ function SinglePageBookingContent() {
   const [submissionError, setSubmissionError] = useState("")
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [bookedCustomerEmail, setBookedCustomerEmail] = useState("")
+
+  // Pricing validation errors
+  const [pricingValidationErrors, setPricingValidationErrors] = useState<{
+    service?: boolean
+    frequency?: boolean
+    questions?: number[]
+  }>({})
+  const [hasPricingValidationAttempted, setHasPricingValidationAttempted] = useState(false)
 
   // Payment tokenization state
   const [paymentToken, setPaymentToken] = useState<string | null>(null)
@@ -198,13 +206,9 @@ function SinglePageBookingContent() {
       const endDateStr = endDate.toISOString().split('T')[0]
       const scopeGroupId = formData.selectedScopeGroup.ScopeGroupId
 
-      console.log('\n🚫 AVAILABILITY API PERFORMANCE TEST')
-      console.log('=======================================')
-      console.log(`URL: https://mccleaners.maidcentral.net/api/Lead/Availability?scopeGroupId=${scopeGroupId}&hours=2&startDate=${startDateStr}&endDate=${endDateStr}`)
+      // Loading availability data
 
       // TEST 1: Direct fetch (bypass all wrappers)
-      console.time('💬 DIRECT_FETCH')
-      const directStart = performance.now()
       try {
         const directResponse = await fetch(
           `https://mccleaners.maidcentral.net/api/Lead/Availability?scopeGroupId=${scopeGroupId}&hours=2&startDate=${startDateStr}&endDate=${endDateStr}`,
@@ -217,25 +221,19 @@ function SinglePageBookingContent() {
           }
         )
         const directEnd = performance.now()
-        console.timeEnd('💬 DIRECT_FETCH')
-        console.log(`📊 Direct fetch: ${(directEnd - directStart).toFixed(2)}ms`)
 
         if (directResponse.ok) {
           const directData = await directResponse.json()
           if (directData.Result) {
             setAvailableDates(directData.Result)
-            console.log(`✅ Direct fetch SUCCESS: ${directData.Result.length} dates`)
             return // Exit early if direct fetch works
           }
         } else {
-          console.warn(`⚠️ Direct fetch failed: ${directResponse.status} ${directResponse.statusText}`)
         }
       } catch (directError) {
-        console.error('❌ Direct fetch error:', directError)
       }
 
       // TEST 2: Wrapped service call (fallback if direct fails)
-      console.time('🔄 WRAPPED_SERVICE')
       const wrappedStart = performance.now()
       const response = await bookingDataService.getAvailability(
         token,
@@ -245,22 +243,17 @@ function SinglePageBookingContent() {
         endDateStr
       )
       const wrappedEnd = performance.now()
-      console.timeEnd('🔄 WRAPPED_SERVICE')
-      console.log(`📊 Wrapped service: ${(wrappedEnd - wrappedStart).toFixed(2)}ms`)
 
       if (response && response.Result) {
         setAvailableDates(response.Result)
-        console.log(`✅ Wrapped service SUCCESS: ${response.Result.length} dates`)
       } else {
         setAvailabilityError("No available dates found")
       }
 
     } catch (error: any) {
-      console.error('❌ Availability load error:', error)
       setAvailabilityError("Unable to load available dates. Please try again.")
     } finally {
       setAvailabilityLoading(false)
-      console.log('=======================================\n')
     }
   }
 
@@ -308,18 +301,21 @@ function SinglePageBookingContent() {
 
     // Only warn when thresholds are crossed to avoid log spam
     if (renderCountRef.current === 10) {
-      console.log(`📊 ${renderCountRef.current} renders - Above ideal, monitoring...`)
     } else if (renderCountRef.current === 20) {
-      console.warn(`⚠️ ${renderCountRef.current} renders - Performance concern`)
     } else if (renderCountRef.current === 50) {
-      console.error(`❌ ${renderCountRef.current} renders - Render loop detected!`)
     }
   })
+
+  // Clear service error when service is selected
+  useEffect(() => {
+    if (formData.selectedScope && pricingValidationErrors.service) {
+      setPricingValidationErrors(prev => ({ ...prev, service: undefined }))
+    }
+  }, [formData.selectedScope])
 
   // Load customization data when service is selected (optimized dependencies)
   useEffect(() => {
     if (token && formData.selectedScopeGroup && formData.selectedScope) {
-      console.time('📦 Load customization data')
       loadCustomizationData()
     }
   }, [token, formData.selectedScopeGroup?.ScopeGroupId, formData.selectedScope?.ScopeId]) // Only depend on IDs
@@ -327,74 +323,69 @@ function SinglePageBookingContent() {
   const loadCustomizationData = async () => {
     if (!token || !formData.selectedScopeGroup || !formData.selectedScope) return
 
-    console.time('📦 CUSTOMIZATION_DATA_LOAD')
     try {
       setCustomizationLoading(true)
       setCustomizationError("")
 
-      console.time('💾 Customization state setup')
       
       // Clear any previously selected modifications when service changes
       setSelectedModifications({})
-      console.timeEnd('💾 Customization state setup')
 
       // Load rate modifications first
-      console.time('⚙️ Rate modifications API')
       let rateModsResponse
       let nonPercentageModifications: any[] = []
       try {
         rateModsResponse = await bookingDataService.getRateModifications(token, formData.selectedScopeGroup.ScopeGroupId)
-        console.timeEnd('⚙️ Rate modifications API')
-        console.time('⚙️ Rate modifications processing')
         if (rateModsResponse.Result) {
-          // Store the full list for pricing calculation
-          setAllRateModifications(rateModsResponse.Result)
+          // Rate modifications loaded successfully
 
-          // Filter: non-percentage, positive cost, and only "Cleaning Extras" type
-          nonPercentageModifications = rateModsResponse.Result.filter(
-            rm => !rm.IsPercentage &&
-                  rm.Cost >= 0 &&
-                  rm.RateModificationType === "Cleaning Extras"
+          // Filter by ScopeId and exclude discount codes and fees
+          const filteredMods = rateModsResponse.Result.filter(
+            rm => rm.ScopeId === formData.selectedScope.ScopeId &&
+                  rm.RateModificationType !== "Discount Codes" &&
+                  rm.RateModificationType !== "Fees"
           )
+
+          // Store the FILTERED list for pricing calculation (only mods for this scope)
+          setAllRateModifications(filteredMods)
+
+          // Track excluded mods for debugging
+          const excludedMods = rateModsResponse.Result.filter(
+            rm => rm.ScopeId !== formData.selectedScope.ScopeId ||
+                  rm.RateModificationType === "Discount Codes" ||
+                  rm.RateModificationType === "Fees"
+          )
+
+          // Some rate modifications were excluded from the UI
+
+          nonPercentageModifications = filteredMods
           setRateModifications(nonPercentageModifications)
-          console.log('⚙️ Loaded', nonPercentageModifications.length, 'rate modifications')
+
+          // Rate modifications filtered and ready for display
         }
-        console.timeEnd('⚙️ Rate modifications processing')
       } catch (error) {
-        console.timeEnd('⚙️ Rate modifications API')
-        console.error('❌ Rate modifications failed:', error)
       }
       
       // Load questions separately with error handling
-      console.time('❓ Questions API')
       try {
         const questionsResponse = await bookingDataService.getQuestions(token, [formData.selectedScope.ScopeId])
-        console.timeEnd('❓ Questions API')
-        console.time('❓ Questions processing')
         
         if (questionsResponse.IsSuccess === false) {
           setQuestions([])
           setQuestionsUnavailable(true)
-          console.log('❓ Questions unavailable')
         } else if (questionsResponse.Result) {
           setQuestions(questionsResponse.Result)
           setQuestionsUnavailable(false)
-          console.log('❓ Loaded', questionsResponse.Result.length, 'questions')
         }
-        console.timeEnd('❓ Questions processing')
       } catch (error: any) {
-        console.timeEnd('❓ Questions API')
-        console.error('❌ Questions failed:', error)
         setQuestions([])
         setQuestionsUnavailable(true)
       }
       
       // Auto-select required modifications
-      console.time('⚙️ Auto-select required mods')
       if (nonPercentageModifications && nonPercentageModifications.length > 0) {
         const requiredMods = nonPercentageModifications.filter(rm => rm.IsRequired)
         if (requiredMods.length > 0) {
-          console.log('⚙️ Auto-selecting', requiredMods.length, 'required modifications')
           setSelectedModifications(prev => {
             const newSelectedMods = { ...prev }
             requiredMods.forEach(mod => {
@@ -404,17 +395,11 @@ function SinglePageBookingContent() {
           })
         }
       }
-      console.timeEnd('⚙️ Auto-select required mods')
       
     } catch (error: any) {
-      console.error('❌ Customization data load failed:', error)
       setCustomizationError("Unable to load customization options. Please try again.")
     } finally {
-      console.time('🏁 Customization cleanup')
       setCustomizationLoading(false)
-      console.timeEnd('🏁 Customization cleanup')
-      console.timeEnd('📦 CUSTOMIZATION_DATA_LOAD')
-      console.timeEnd('📦 Load customization data')
     }
   }
 
@@ -422,20 +407,52 @@ function SinglePageBookingContent() {
 
   // Manual pricing calculation function (no automatic triggering)
   const calculatePricing = useCallback(async () => {
-    if (!token || !formData.selectedScopeGroup || !formData.selectedScope || !selectedFrequency) {
-      console.warn('Cannot calculate pricing: Missing required data')
+    setHasPricingValidationAttempted(true)
+
+    // Track validation errors
+    const errors: {
+      service?: boolean
+      frequency?: boolean
+      questions?: number[]
+    } = {}
+
+    // Check service selection
+    if (!formData.selectedScopeGroup || !formData.selectedScope) {
+      errors.service = true
+    }
+
+    // Check frequency selection
+    if (!selectedFrequency) {
+      errors.frequency = true
+    }
+
+    // Check required questions
+    const requiredQuestions = questions.filter(q => q.IsRequired)
+    const unansweredQuestions: number[] = []
+
+    requiredQuestions.forEach(q => {
+      const answer = questionAnswers[q.QuestionId]
+      if (!answer || answer.toString().trim() === "") {
+        unansweredQuestions.push(q.QuestionId)
+      }
+    })
+
+    if (unansweredQuestions.length > 0) {
+      errors.questions = unansweredQuestions
+    }
+
+    // Set validation errors
+    setPricingValidationErrors(errors)
+
+    // If there are any errors, don't proceed with pricing calculation
+    if (errors.service || errors.frequency || errors.questions) {
       return
     }
 
-    // Check if all required questions are answered
-    const requiredQuestions = questions.filter(q => q.IsRequired)
-    const hasAnsweredRequired = requiredQuestions.every(q => {
-      const answer = questionAnswers[q.QuestionId]
-      return answer && answer.toString().trim() !== ""
-    })
+    // Clear errors if everything is valid
+    setPricingValidationErrors({})
 
-    if (!hasAnsweredRequired) {
-      console.warn('Cannot calculate pricing: Required questions not answered')
+    if (!token) {
       return
     }
 
@@ -445,14 +462,17 @@ function SinglePageBookingContent() {
       rateModifications: allRateModifications
     }
 
-    console.log('🧮 Calculating pricing manually...')
     await calculatePricingAsync(token, currentWidgetState)
   }, [token, formData.selectedScopeGroup, formData.selectedScope, selectedFrequency, questions, questionAnswers, selectedModifications, allRateModifications, calculatePricingAsync])
 
   const handleFrequencySelect = useCallback(async (frequency: Frequency) => {
     setSelectedFrequency(frequency)
     updateFormData({ selectedFrequency: frequency })
-  }, [updateFormData])
+    // Clear frequency error when user selects
+    if (pricingValidationErrors.frequency) {
+      setPricingValidationErrors(prev => ({ ...prev, frequency: undefined }))
+    }
+  }, [updateFormData, pricingValidationErrors.frequency])
 
   const handleModificationToggle = useCallback((modId: number, quantity: number = 1) => {
     setSelectedModifications(prev => {
@@ -471,7 +491,14 @@ function SinglePageBookingContent() {
       ...prev,
       [questionId]: answer
     }))
-  }, [])
+    // Clear question error when user answers
+    if (pricingValidationErrors.questions?.includes(questionId)) {
+      setPricingValidationErrors(prev => ({
+        ...prev,
+        questions: prev.questions?.filter(id => id !== questionId)
+      }))
+    }
+  }, [pricingValidationErrors.questions])
 
   const handleMultiSelectAnswer = useCallback((questionId: number, selectedValues: string[]) => {
     // Join multiple AnswerIds with comma for API format
@@ -485,32 +512,22 @@ function SinglePageBookingContent() {
 
   // Create or update lead when conditions are met
   const createOrUpdateLead = async () => {
-    console.time('🎯 LEAD_CREATION_TOTAL')
-    console.time('⚡ State checks and setup')
 
     // Don't create lead if already in progress or already created
     if (leadCreationInProgress || leadCreationAttempted) {
-      console.timeEnd('⚡ State checks and setup')
-      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
       return
     }
 
     // Check if all required data from previous sections is present
     // Customer details will be validated separately
     if (!arePreviousSectionsComplete()) {
-      console.timeEnd('⚡ State checks and setup')
-      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
       return
     }
 
-    console.timeEnd('⚡ State checks and setup')
-    console.time('🔄 State updates')
 
     setLeadCreationInProgress(true)
     setLeadCreationAttempted(true)
 
-    console.timeEnd('🔄 State updates')
-    console.time('📦 Data preparation')
 
     try {
       // Get customer data from form ref
@@ -530,113 +547,56 @@ function SinglePageBookingContent() {
         PostalCode: validatedPostalCode?.PostalCode || zipCode
       }
 
-      console.timeEnd('📦 Data preparation')
-      console.log('🔍 Lead payload size:', JSON.stringify(leadData).length, 'bytes')
-      console.log('📤 Sending lead data:', JSON.stringify(leadData, null, 2))
-      console.log('🔐 Token length:', token?.length || 0, 'chars')
 
-      console.time('🌐 LEAD_API_CALL')
       const apiCallStart = performance.now()
 
       const response = await leadService.createOrUpdate(token, leadData)
 
       const apiCallEnd = performance.now()
-      console.timeEnd('🌐 LEAD_API_CALL')
-      console.log(`📊 Lead API took: ${(apiCallEnd - apiCallStart).toFixed(2)}ms`)
-      console.log('📥 Lead API full response:', response)
 
-      console.time('🔍 Response processing')
 
       // Check for the Result object which contains the LeadId
       if (response.IsSuccess && response.Result && response.Result.LeadId) {
         const leadId = response.Result.LeadId
 
-        console.time('💾 Lead state updates')
         setLeadId(leadId)
         updateFormData({ leadId })
-        console.timeEnd('💾 Lead state updates')
 
-        console.timeEnd('🔍 Response processing')
-        console.log('✅ Lead created successfully with ID:', leadId)
 
         // Now create the quote with all booking details
         await createQuoteForLead(leadId, customerData)
       } else if (response.LeadId) {
         // Fallback for direct LeadId in response
-        console.time('💾 Lead state updates (fallback)')
         setLeadId(response.LeadId)
         updateFormData({ leadId: response.LeadId })
-        console.timeEnd('💾 Lead state updates (fallback)')
-        console.timeEnd('🔍 Response processing')
 
-        console.log('✅ Lead created successfully with ID:', response.LeadId)
         await createQuoteForLead(response.LeadId, customerData)
       } else {
-        console.timeEnd('🔍 Response processing')
-        console.error('❌ Lead creation failed:', {
-          errorMessage: response.Message || response.ErrorMessage,
-          fullResponse: response,
-          leadData: leadData
-        })
+          // Lead creation failed with error response
       }
     } catch (error) {
-      console.error('❌ Exception in createOrUpdateLead:', error)
-      console.error('🚨 Error details:', {
-        message: error.message,
-        stack: error.stack,
-        timestamp: new Date().toISOString()
-      })
+        // Error occurred during lead creation
     } finally {
-      console.time('🏁 Final state cleanup')
       setLeadCreationInProgress(false)
-      console.timeEnd('🏁 Final state cleanup')
-      console.timeEnd('🎯 LEAD_CREATION_TOTAL')
     }
   }
 
   // Create quote after lead is created
   const createQuoteForLead = async (leadId: number, customerData: any) => {
-    console.time('💼 QUOTE_CREATION_TOTAL')
-    console.log('=== STARTING QUOTE CREATION ===')
-    console.log('Lead ID:', leadId)
-    console.log('Token available:', !!token)
-    console.time('📋 Quote state logging')
-    console.log('Current state at quote creation:', {
-      selectedScope: formData.selectedScope,
-      selectedScopeGroup: formData.selectedScopeGroup,
-      selectedFrequency,
-      selectedModifications,
-      questionAnswers,
-      allRateModifications: allRateModifications?.length || 0,
-      customerData,
-      validatedPostalCode
-    })
-    console.timeEnd('📋 Quote state logging')
+    // Creating quote for lead
 
-    console.time('✅ Quote validation')
 
     // Early validation
     if (!formData.selectedScope || !formData.selectedScopeGroup) {
-      console.timeEnd('✅ Quote validation')
-      console.timeEnd('💼 QUOTE_CREATION_TOTAL')
-      console.error('❌ Cannot create quote: Missing scope or scope group', {
-        scope: formData.selectedScope,
-        scopeGroup: formData.selectedScopeGroup
-      })
       return
     }
 
     if (!selectedFrequency) {
-      console.timeEnd('✅ Quote validation')
-      console.timeEnd('💼 QUOTE_CREATION_TOTAL')
-      console.error('❌ Cannot create quote: Missing frequency')
       return
     }
 
-    console.timeEnd('✅ Quote validation')
 
     try {
-      console.log('✅ Starting to build quote data...')
       // Build rate modifications for the quote
       const rateModifications: QuoteRateModification[] = Object.entries(selectedModifications)
         .filter(([_, quantity]) => quantity > 0)
@@ -670,7 +630,6 @@ function SinglePageBookingContent() {
         FrequencyId: selectedFrequency.FrequencyId,
         RateModifications: rateModifications
       })
-      console.log('✅ Scopes of work built:', JSON.stringify(scopesOfWork, null, 2))
 
       const quoteData: QuoteCreateRequest = {
         LeadId: leadId,
@@ -695,120 +654,63 @@ function SinglePageBookingContent() {
         PaymentExpiry: paymentExpiry || undefined
       }
 
-      console.log('✅ Quote data prepared:', JSON.stringify(quoteData, null, 2))
 
-      console.log('🔄 Calling createOrUpdateQuote API...')
 
       if (!token) {
-        console.error('❌ No token available for quote creation!')
         return
       }
 
       const quoteResponse = await leadService.createOrUpdateQuote(token, quoteData)
-      console.log('📥 Quote API response:', quoteResponse)
 
       // Check for the Result object which contains the QuoteId
       if (quoteResponse.IsSuccess && quoteResponse.Result && quoteResponse.Result.QuoteId) {
         const quoteId = quoteResponse.Result.QuoteId
         setQuoteId(quoteId)
         updateFormData({ quoteId })
-        console.log('✅ Quote created successfully with ID:', quoteId)
-        console.log('🎉 Both Lead and Quote created successfully!')
-        console.log('Lead ID:', leadId, 'Quote ID:', quoteId)
       } else if (quoteResponse.QuoteId) {
         // Fallback for direct QuoteId in response
         setQuoteId(quoteResponse.QuoteId)
         updateFormData({ quoteId: quoteResponse.QuoteId })
-        console.log('✅ Quote created successfully with ID:', quoteResponse.QuoteId)
       } else {
-        console.warn('⚠️ Quote creation response without QuoteId:', quoteResponse)
       }
     } catch (error) {
-      console.error('❌ CRITICAL ERROR in createQuoteForLead:', error)
-      console.error('Error occurred during:', {
-        phase: 'data_preparation_or_api_call',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        leadId,
-        hasToken: !!token,
-        hasScope: !!formData.selectedScope,
-        hasFrequency: !!selectedFrequency
-      })
       // Don't throw - let the lead creation succeed even if quote fails
     }
   }
 
   // Manual save handler for lead and quote creation
   const handleSaveContactInfo = async () => {
-    console.time('🕐 TOTAL_CONTACT_SAVE_TIME')
-    console.time('⏱️ Pre-validation checks')
 
     // Validate that previous sections are complete
     if (!arePreviousSectionsComplete()) {
-      console.timeEnd('⏱️ Pre-validation checks')
-      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
       return
     }
 
     // Validate customer details (will show errors if incomplete)
     if (!validateCustomerDetails()) {
-      console.timeEnd('⏱️ Pre-validation checks')
-      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
       return
     }
 
     // Don't save if already in progress or already saved
     if (leadCreationInProgress || leadCreationAttempted) {
-      console.timeEnd('⏱️ Pre-validation checks')
-      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
       return
     }
 
-    console.timeEnd('⏱️ Pre-validation checks')
-    console.log('🚀 Starting lead creation process...')
 
     // Call lead creation directly and await it
     try {
       await createOrUpdateLead()
-      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
-      console.log(`✅ Contact save process completed (${renderCountRef.current} total renders)`)
     } catch (error) {
-      console.error('❌ Lead creation failed:', error)
-      console.timeEnd('🕐 TOTAL_CONTACT_SAVE_TIME')
       setSubmissionError('Failed to save contact information. Please try again.')
       setLeadCreationInProgress(false)
     }
 
     // Reset render count for next interaction
     if (renderCountRef.current > 15) {
-      console.warn(`⚠️ High render count detected: ${renderCountRef.current} - Consider further optimization`)
     } else {
-      console.log(`✅ Render performance: GOOD (${renderCountRef.current} renders)`)
     }
 
-    // Print performance summary
-    console.log(`
-
-📊 PERFORMANCE SUMMARY:
-====================================
-Render Count: ${renderCountRef.current} (Target: <15)
-
-If you see timing over 2000ms, check these areas:
-1. 🌐 API calls (should be <3000ms each)
-2. 📦 Data preparation (should be <100ms)
-3. 🔄 State updates (should be <50ms)
-4. 🔍 Validation (should be <50ms)
-
-🚀 BUTTON-BASED VALIDATION IMPLEMENTED:
-- Removed automatic pricing calculations
-- Removed real-time zip code validation
-- Added manual "Calculate Pricing" button
-- Added manual "Validate Location" button
-- Converted to explicit user-triggered actions
-- Eliminated continuous re-render triggers
-
-🎯 TARGET: Minimal renders (only on user button clicks)
-====================================\n\n`)
+    // Performance monitoring completed
   }
 
 
@@ -818,22 +720,15 @@ If you see timing over 2000ms, check these areas:
   }, [updateSaveButtonState, formData.selectedScope, formData.selectedScopeGroup, validatedPostalCode, selectedDate, selectedFrequency])
 
   const validateCustomerDetails = useCallback(() => {
-    console.time('🔍 Customer validation')
 
     if (!customerFormRef.current) {
-      console.timeEnd('🔍 Customer validation')
-      console.log('🎯 Validation result: FORM_REF_NOT_AVAILABLE')
       return false
     }
 
     const validation = customerFormRef.current.validateForm()
 
-    console.time('💾 Validation state update')
     setCustomerErrors(validation.errors)
-    console.timeEnd('💾 Validation state update')
 
-    console.timeEnd('🔍 Customer validation')
-    console.log('🎯 Validation result:', validation.isValid ? 'VALID' : `ERRORS: ${Object.keys(validation.errors).join(', ')}`)
     return validation.isValid
   }, [])
 
@@ -852,18 +747,13 @@ If you see timing over 2000ms, check these areas:
       }
     })
 
-    console.log("Payment token received successfully", {
-      tokenLength: token.length,
-      expiry: expiry,
-      timestamp: new Date().toISOString()
-    })
+      // Payment token received successfully
   }, [formData.payment, updateFormData])
 
   const handleTokenizationError = useCallback((error: string) => {
     setPaymentToken(null)
     setPaymentExpiry(null)
     setTokenizationError(error)
-    console.error("Payment tokenization error:", error)
   }, [])
 
   const isFormComplete = () => {
@@ -933,7 +823,6 @@ If you see timing over 2000ms, check these areas:
 
       // If we don't have a leadId yet, create the lead first
       if (!finalLeadId) {
-        console.log('Creating lead first...')
         await handleSaveClick()
 
         // Wait a bit for state to update
@@ -943,7 +832,6 @@ If you see timing over 2000ms, check these areas:
         // But we need to use the state values that will be set
         // For now, we'll need to return and let user click again
         if (!leadId || !quoteId) {
-          console.error('Lead or Quote creation failed')
           setSubmissionError('Please save your information first before booking')
           return
         }
@@ -953,7 +841,6 @@ If you see timing over 2000ms, check these areas:
       }
 
       if (!finalLeadId || !finalQuoteId) {
-        console.error('Missing lead or quote ID')
         setSubmissionError('Please save your information first before booking')
         return
       }
@@ -1032,12 +919,10 @@ If you see timing over 2000ms, check these areas:
         CustomerBillingPostalCode: validatedPostalCode?.PostalCode || zipCode
       }
 
-      console.log('Sending booking request:', JSON.stringify(bookingRequest, null, 2))
 
       // Call the booking API
       const bookingResponse = await bookQuoteService.bookQuote(token!, bookingRequest)
 
-      console.log('Booking response:', bookingResponse)
 
       if (bookingResponse.success) {
         // Update form data with booking information
@@ -1055,7 +940,6 @@ If you see timing over 2000ms, check these areas:
       }
 
     } catch (error: any) {
-      console.error('Booking error:', error)
       setSubmissionError(error.message || 'Failed to complete booking. Please try again.')
 
       // Scroll to customer section to show error
@@ -1082,6 +966,9 @@ If you see timing over 2000ms, check these areas:
         {/* Section 1: Service Selection */}
         <div ref={serviceRef} data-testid="section-service" className="py-3 sm:py-6">
           <ServiceSelection />
+          {hasPricingValidationAttempted && pricingValidationErrors.service && (
+            <p className="text-red-600 text-sm mt-2">Please select a service before calculating price</p>
+          )}
         </div>
 
         <SectionDivider />
@@ -1160,6 +1047,9 @@ If you see timing over 2000ms, check these areas:
                         </motion.button>
                       ))}
                     </div>
+                    {hasPricingValidationAttempted && pricingValidationErrors.frequency && (
+                      <p className="text-red-600 text-sm mt-2">Please select a service frequency</p>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -1256,12 +1146,9 @@ If you see timing over 2000ms, check these areas:
                           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-6">
                           {questions.map((question) => (
                             <div key={question.QuestionId}>
-                              <Label className={cn(
-                                "text-base font-medium",
-                                question.IsRequired && "text-red-600"
-                              )}>
+                              <Label className="text-base font-medium">
                                 {question.QuestionText}
-                                {question.IsRequired && " *"}
+                                {question.IsRequired && <span className="text-red-600"> *</span>}
                               </Label>
                               
                               {question.HelpText && (
@@ -1281,18 +1168,40 @@ If you see timing over 2000ms, check these areas:
                                   onChange={(selectedValues) => handleMultiSelectAnswer(question.QuestionId, selectedValues)}
                                   placeholder="Select options..."
                                   className="mt-2"
+                                  isRequired={question.IsRequired}
                                 />
                               ) : question.QuestionType === "Select List" ? (
                                 <Select
                                   value={questionAnswers[question.QuestionId] || ""}
                                   onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
                                 >
-                                  <SelectTrigger className="mt-2">
+                                  <SelectTrigger className={cn(
+                                    "mt-2",
+                                    question.IsRequired && "!bg-white !border-red-200 !text-gray-900 [&>span]:!text-gray-900"
+                                  )}
+                                  style={question.IsRequired ? {
+                                    backgroundColor: '#ffffff',
+                                    borderColor: '#fecaca',
+                                    color: '#111827'
+                                  } : undefined}>
                                     <SelectValue placeholder="Select an option" />
                                   </SelectTrigger>
-                                  <SelectContent>
-                                    {question.Answers.map((answer) => (
-                                      <SelectItem key={`${question.QuestionId}-${answer.AnswerId}`} value={answer.AnswerId.toString()}>
+                                  <SelectContent className={cn(
+                                    question.IsRequired && "!bg-white !border-gray-200 !text-gray-900 shadow-lg"
+                                  )}
+                                  style={question.IsRequired ? {
+                                    backgroundColor: '#ffffff',
+                                    borderColor: '#e5e7eb',
+                                    color: '#111827'
+                                  } : undefined}>
+                                    {question.Answers.map((answer, index) => (
+                                      <SelectItem
+                                        key={`${question.QuestionId}-answer-${index}`}
+                                        value={answer.AnswerId.toString()}
+                                        className={cn(
+                                          question.IsRequired && "!text-gray-900 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100"
+                                        )}
+                                      >
                                         {answer.AnswerText}
                                       </SelectItem>
                                     ))}
@@ -1340,6 +1249,11 @@ If you see timing over 2000ms, check these areas:
                                   placeholder="Enter your answer"
                                   className="mt-2"
                                 />
+                              )}
+                              {hasPricingValidationAttempted &&
+                               pricingValidationErrors.questions?.includes(question.QuestionId) &&
+                               question.IsRequired && (
+                                <p className="text-red-600 text-sm mt-1">This field is required</p>
                               )}
                             </div>
                           ))}
@@ -1783,10 +1697,8 @@ If you see timing over 2000ms, check these areas:
  */
 export function SinglePageBookingFlow() {
   return (
-    <AuthenticationProvider>
-      <BookingProvider>
-        <SinglePageBookingContent />
-      </BookingProvider>
-    </AuthenticationProvider>
+    <BookingProvider>
+      <SinglePageBookingContent />
+    </BookingProvider>
   )
 }

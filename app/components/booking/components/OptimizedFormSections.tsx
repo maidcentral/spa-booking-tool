@@ -1,12 +1,14 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { Button } from "@/app/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/app/components/ui/select";
-import { Calendar, MapPin, Clock, Check, Plus, Settings } from "lucide-react";
+import { Calendar, MapPin, Clock, Check, Plus, Settings, AlertCircle } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/app/lib/utils";
+import { validateQuestionAnswer, validateAllQuestions } from "@/app/lib/questionValidation";
+import { ErrorBoundary } from "@/app/components/common/ErrorBoundary";
 import type { PostalCodeResult, RateModification, Frequency, QuestionData } from "@/app/services/api/booking-data";
 
 /**
@@ -358,23 +360,68 @@ interface QuestionsSectionProps {
   questionAnswers: Record<number, string>;
   questionsUnavailable: boolean;
   onQuestionAnswer: (questionId: number, answer: string) => void;
+  questionErrors?: Record<number, string>;
+  onValidationChange?: (errors: Record<number, string>) => void;
 }
 
 export const QuestionsSection = memo<QuestionsSectionProps>(({
   questions,
   questionAnswers,
   questionsUnavailable,
-  onQuestionAnswer
+  onQuestionAnswer,
+  questionErrors = {},
+  onValidationChange
 }) => {
+  // Local state for managing validation errors
+  const [localErrors, setLocalErrors] = useState<Record<number, string>>({});
+
+  // Validate a single question and update errors
+  const validateQuestion = useCallback((question: QuestionData, answer: string) => {
+    const result = validateQuestionAnswer(question, answer);
+    const newErrors = { ...localErrors };
+
+    if (!result.isValid && result.error) {
+      newErrors[question.QuestionId] = result.error;
+    } else {
+      delete newErrors[question.QuestionId];
+    }
+
+    setLocalErrors(newErrors);
+
+    // Notify parent component of validation changes
+    if (onValidationChange) {
+      onValidationChange(newErrors);
+    }
+  }, [localErrors, onValidationChange]);
+
+  // Handle question answer with validation
+  const handleQuestionAnswer = useCallback((questionId: number, answer: string) => {
+    // Update the answer
+    onQuestionAnswer(questionId, answer);
+
+    // Find the question and validate
+    const question = questions.find(q => q.QuestionId === questionId);
+    if (question) {
+      validateQuestion(question, answer);
+    }
+  }, [onQuestionAnswer, questions, validateQuestion]);
+
+  // Use provided errors or local errors
+  const displayErrors = Object.keys(questionErrors).length > 0 ? questionErrors : localErrors;
+
   if (questions.length === 0 && !questionsUnavailable) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+    <ErrorBoundary
+      fallbackTitle="Questions Section Error"
+      fallbackMessage="Unable to load service details questions. You can continue with your booking."
     >
-      <Card>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Settings className="w-5 h-5" />
@@ -392,12 +439,9 @@ export const QuestionsSection = memo<QuestionsSectionProps>(({
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {questions.map((question) => (
               <div key={question.QuestionId}>
-                <Label className={cn(
-                  "text-base font-medium",
-                  question.IsRequired && "text-red-600"
-                )}>
+                <Label className="text-base font-medium">
                   {question.QuestionText}
-                  {question.IsRequired && " *"}
+                  {question.IsRequired && <span className="text-red-600"> *</span>}
                 </Label>
                 
                 {question.HelpText && (
@@ -408,63 +452,147 @@ export const QuestionsSection = memo<QuestionsSectionProps>(({
                 
                 {/* Handle different question types */}
                 {question.QuestionType === "Select List" || question.QuestionType === "Multiple Select List" ? (
-                  <Select
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onValueChange={(value) => onQuestionAnswer(question.QuestionId, value)}
-                  >
-                    <SelectTrigger className="mt-2">
+                  <div>
+                    <Select
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
+                    >
+                    <SelectTrigger className={cn(
+                      "mt-2",
+                      question.IsRequired && "!bg-white !border-red-200 !text-gray-900 [&>span]:!text-gray-900"
+                    )}
+                    style={question.IsRequired ? {
+                      backgroundColor: '#ffffff',
+                      borderColor: '#fecaca',
+                      color: '#111827'
+                    } : undefined}>
                       <SelectValue placeholder="Select an option" />
                     </SelectTrigger>
-                    <SelectContent>
-                      {question.Answers.map((answer) => (
-                        <SelectItem key={`${question.QuestionId}-${answer.AnswerId}`} value={answer.AnswerId.toString()}>
+                    <SelectContent className={cn(
+                      question.IsRequired && "!bg-white !border-gray-200 !text-gray-900 shadow-lg"
+                    )}
+                    style={question.IsRequired ? {
+                      backgroundColor: '#ffffff',
+                      borderColor: '#e5e7eb',
+                      color: '#111827'
+                    } : undefined}>
+                      {question.Answers.map((answer, index) => (
+                        <SelectItem
+                          key={`${question.QuestionId}-answer-${index}`}
+                          value={answer.AnswerId.toString()}
+                          className={cn(
+                            question.IsRequired && "!text-gray-900 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100"
+                          )}
+                        >
                           {answer.AnswerText}
                         </SelectItem>
                       ))}
                     </SelectContent>
-                  </Select>
+                    </Select>
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 ) : question.QuestionType === "Whole Number" ? (
-                  <Input
-                    type="number"
-                    step="1"
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onChange={(e) => onQuestionAnswer(question.QuestionId, e.target.value)}
-                    placeholder="Enter a number"
-                    className="mt-2"
-                  />
+                  <div>
+                    <Input
+                      type="number"
+                      step="1"
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                      placeholder="Enter a number"
+                      className={cn(
+                        "mt-2",
+                        displayErrors[question.QuestionId] && "border-red-500 focus-visible:ring-red-500"
+                      )}
+                    />
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 ) : question.QuestionType === "Decimal" ? (
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onChange={(e) => onQuestionAnswer(question.QuestionId, e.target.value)}
-                    placeholder="Enter a decimal number"
-                    className="mt-2"
-                  />
+                  <div>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                      placeholder="Enter a decimal number"
+                      className={cn(
+                        "mt-2",
+                        displayErrors[question.QuestionId] && "border-red-500 focus-visible:ring-red-500"
+                      )}
+                    />
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 ) : question.QuestionType === "Rich Text" ? (
-                  <textarea
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onChange={(e) => onQuestionAnswer(question.QuestionId, e.target.value)}
-                    placeholder="Enter your notes..."
-                    className="mt-2 w-full p-3 border border-gray-300 rounded-lg resize-y"
-                    rows={3}
-                  />
+                  <div>
+                    <textarea
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                      placeholder="Enter your notes..."
+                      className={cn(
+                        "mt-2 w-full p-3 border border-gray-300 rounded-lg resize-y",
+                        displayErrors[question.QuestionId] && "border-red-500 focus:ring-red-500"
+                      )}
+                      rows={3}
+                    />
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 ) : question.QuestionText.toLowerCase().includes("phone") ? (
-                  <Input
-                    type="tel"
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onChange={(e) => onQuestionAnswer(question.QuestionId, e.target.value)}
-                    placeholder="Enter phone number"
-                    className="mt-2"
-                  />
+                  <div>
+                    <Input
+                      type="tel"
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                      placeholder="Enter phone number"
+                      className={cn(
+                        "mt-2",
+                        displayErrors[question.QuestionId] && "border-red-500 focus-visible:ring-red-500"
+                      )}
+                    />
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 ) : (
-                  <Input
-                    type="text"
-                    value={questionAnswers[question.QuestionId] || ""}
-                    onChange={(e) => onQuestionAnswer(question.QuestionId, e.target.value)}
-                    placeholder="Enter your answer"
-                    className="mt-2"
-                  />
+                  <div>
+                    <Input
+                      type="text"
+                      value={questionAnswers[question.QuestionId] || ""}
+                      onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                      placeholder="Enter your answer"
+                      className={cn(
+                        "mt-2",
+                        displayErrors[question.QuestionId] && "border-red-500 focus-visible:ring-red-500"
+                      )}
+                    />
+                    {displayErrors[question.QuestionId] && (
+                      <div className="flex items-center gap-1 mt-1 text-sm text-red-600">
+                        <AlertCircle className="w-4 h-4" />
+                        {displayErrors[question.QuestionId]}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -473,6 +601,7 @@ export const QuestionsSection = memo<QuestionsSectionProps>(({
         </CardContent>
       </Card>
     </motion.div>
+    </ErrorBoundary>
   );
 });
 

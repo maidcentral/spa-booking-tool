@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react"
 import { BookingProvider, useBooking } from "@/app/contexts/BookingContext"
-import { AuthenticationProvider, useAuth } from "./AuthenticationProvider"
+import { useAuth } from "./AuthenticationProvider"
 import { BookingLayout } from "./BookingLayout"
 import { ProgressIndicator } from "./ProgressIndicator"
 import { ServiceSelection } from "./steps/ServiceSelection"
@@ -185,14 +185,31 @@ function BookingContent() {
       try {
         rateModsResponse = await bookingDataService.getRateModifications(token, formData.selectedScopeGroup.ScopeGroupId)
         if (rateModsResponse.Result) {
-          // Store the full list for pricing calculation
-          setAllRateModifications(rateModsResponse.Result)
-          
-          // Filter out percentage-based modifications AND discount items (negative cost) - users shouldn't select these
-          nonPercentageModifications = rateModsResponse.Result.filter(
-            rm => !rm.IsPercentage && rm.Cost >= 0
+          // Rate modifications loaded successfully)
+
+          // Filter by ScopeId and exclude discount codes and fees
+          const filteredMods = rateModsResponse.Result.filter(
+            rm => rm.ScopeId === formData.selectedScope.ScopeId &&
+                  rm.RateModificationType !== "Discount Codes" &&
+                  rm.RateModificationType !== "Fees"
           )
+
+          // Store the FILTERED list for pricing calculation (only mods for this scope)
+          setAllRateModifications(filteredMods)
+
+          // Track excluded mods for debugging
+          const excludedMods = rateModsResponse.Result.filter(
+            rm => rm.ScopeId !== formData.selectedScope.ScopeId ||
+                  rm.RateModificationType === "Discount Codes" ||
+                  rm.RateModificationType === "Fees"
+          )
+
+          // Some rate modifications were excluded from the UI
+
+          nonPercentageModifications = filteredMods
           setRateModifications(nonPercentageModifications)
+
+          // Rate modifications filtered and ready for display
         }
       } catch (error) {
       }
@@ -595,12 +612,9 @@ function BookingContent() {
                           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                           {questions.map((question) => (
                             <div key={question.QuestionId}>
-                              <Label className={cn(
-                                "text-base font-medium",
-                                question.IsRequired && "text-red-600"
-                              )}>
+                              <Label className="text-base font-medium">
                                 {question.QuestionText}
-                                {question.IsRequired && " *"}
+                                {question.IsRequired && <span className="text-red-600"> *</span>}
                               </Label>
                               
                               {question.HelpText && (
@@ -620,18 +634,40 @@ function BookingContent() {
                                   onChange={(selectedValues) => handleMultiSelectAnswer(question.QuestionId, selectedValues)}
                                   placeholder="Select options..."
                                   className="mt-2"
+                                  isRequired={question.IsRequired}
                                 />
                               ) : question.QuestionType === "Select List" ? (
                                 <Select
                                   value={questionAnswers[question.QuestionId] || ""}
                                   onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
                                 >
-                                  <SelectTrigger className="mt-2">
+                                  <SelectTrigger className={cn(
+                                    "mt-2",
+                                    question.IsRequired && "!bg-white !border-red-200 !text-gray-900 [&>span]:!text-gray-900"
+                                  )}
+                                  style={question.IsRequired ? {
+                                    backgroundColor: '#ffffff',
+                                    borderColor: '#fecaca',
+                                    color: '#111827'
+                                  } : undefined}>
                                     <SelectValue placeholder="Select an option" />
                                   </SelectTrigger>
-                                  <SelectContent>
-                                    {question.Answers.map((answer) => (
-                                      <SelectItem key={`${question.QuestionId}-${answer.AnswerId}`} value={answer.AnswerId.toString()}>
+                                  <SelectContent className={cn(
+                                    question.IsRequired && "!bg-white !border-gray-200 !text-gray-900 shadow-lg"
+                                  )}
+                                  style={question.IsRequired ? {
+                                    backgroundColor: '#ffffff',
+                                    borderColor: '#e5e7eb',
+                                    color: '#111827'
+                                  } : undefined}>
+                                    {question.Answers.map((answer, index) => (
+                                      <SelectItem
+                                        key={`${question.QuestionId}-answer-${index}`}
+                                        value={answer.AnswerId.toString()}
+                                        className={cn(
+                                          question.IsRequired && "!text-gray-900 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100"
+                                        )}
+                                      >
                                         {answer.AnswerText}
                                       </SelectItem>
                                     ))}
@@ -996,10 +1032,8 @@ function BookingContent() {
 
 export function BookingWidget() {
   return (
-    <AuthenticationProvider>
-      <BookingProvider>
-        <BookingContent />
-      </BookingProvider>
-    </AuthenticationProvider>
+    <BookingProvider>
+      <BookingContent />
+    </BookingProvider>
   )
 }
