@@ -24,8 +24,6 @@ export async function startMocking() {
     },
     onUnhandledRequest: 'bypass',
     quiet: false // Set to true to disable MSW logs
-  }).then(() => {
-    console.log('[MSW] Mocking enabled');
   });
 }
 
@@ -33,6 +31,5 @@ export async function startMocking() {
 export function stopMocking() {
   if (worker) {
     worker.stop();
-    console.log('[MSW] Mocking disabled');
   }
 }

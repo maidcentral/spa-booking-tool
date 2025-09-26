@@ -134,17 +134,17 @@ const buildPriceCalculationRequest = (
   selectedModifications: Record<number, number> = {},
   rateModifications: any[] = []
 ): PriceCalculationRequest => {
-  
+
   // Build rate modifications array from selected modifications
-  
+
   const rateModsArray = Object.entries(selectedModifications)
     .filter(([_, quantity]) => quantity > 0)
     .map(([modId, quantity]) => {
       const modIdInt = parseInt(modId);
       const rateMod = rateModifications.find(rm => rm.RateModificationId === modIdInt);
-      
-      
-      
+
+      // Find the rate modification details
+
       // Build the rate modification object according to API spec
       const modRequest: any = {
         Quantity: quantity,
@@ -187,7 +187,9 @@ const buildPriceCalculationRequest = (
   if (rateModsArray.length > 0) {
     request.ScopesOfWork[0].RateModifications = rateModsArray;
   }
-  
+
+  // Return the complete pricing request
+
   return request;
 };
 

@@ -11,13 +11,13 @@ export async function GET(request: NextRequest) {
     const apiKey = process.env.API_KEY?.trim();
 
     if (!apiUsername || !apiKey) {
-return NextResponse.json(
+      return NextResponse.json(
         { error: 'Server configuration error: Missing API credentials' },
         { status: 500 }
       );
     }
 
-// Call MaidCentral token endpoint with API credentials
+    // Call MaidCentral token endpoint with API credentials
     const tokenEndpoint = 'https://mccleaners.maidcentral.net/token';
     
     // The MaidCentral token endpoint requires credentials in form-data format
@@ -36,16 +36,16 @@ return NextResponse.json(
 
     if (!response.ok) {
       const errorText = await response.text();
-return NextResponse.json(
+      return NextResponse.json(
         { error: `Authentication failed: ${response.status}` },
         { status: response.status }
       );
     }
 
     const data = await response.json();
-    
+
     if (!data.access_token) {
-return NextResponse.json(
+      return NextResponse.json(
         { error: 'Invalid response from token endpoint - no access token received' },
         { status: 500 }
       );

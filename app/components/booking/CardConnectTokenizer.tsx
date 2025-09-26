@@ -42,7 +42,7 @@ export function CardConnectTokenizer({
       ]
 
       if (!allowedOrigins.includes(event.origin)) {
-        console.warn("Received message from unauthorized origin:", event.origin)
+        // Unauthorized origin detected
         return
       }
 
@@ -63,17 +63,13 @@ export function CardConnectTokenizer({
             hiddenInput.value = token.message
           }
 
-          console.log("Token received successfully:", {
-            tokenLength: token.message.length,
-            expiry: token.expiry || "",
-            timestamp: new Date().toISOString()
-          })
+          // Token received successfully
 
           // Call callback with token and expiry
           onTokenReceived(token.message, token.expiry || "")
         }
       } catch (error) {
-        console.error("Error parsing tokenization response:", error)
+        // Error parsing tokenization response
         const errorMessage = "Tokenization failed"
         setTokenizationError(errorMessage)
         onError(errorMessage)
@@ -91,7 +87,7 @@ export function CardConnectTokenizer({
 
   const handleIframeLoad = () => {
     setIsLoading(false)
-    console.log("CardConnect iFrame loaded successfully")
+    // CardConnect iFrame loaded successfully
   }
 
   const handleIframeError = () => {

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Card, CardContent } from '@/app/components/ui/card';
+import { authManager } from '@/app/lib/authManager';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -28,50 +29,36 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
     error: null,
     token: null,
   });
-  const [hasInitialized, setHasInitialized] = useState(false);
 
   const authenticate = async () => {
-    // Prevent multiple authentication attempts
-    if (hasInitialized) {
-      return;
-    }
-    
+
     try {
-      setAuthState(prev => ({ 
-        ...prev, 
-        isLoading: true, 
+      setAuthState(prev => ({
+        ...prev,
+        isLoading: true,
         error: null
       }));
-      
-      
-      // Call our server-side API route that has access to secure env variables
-      const response = await fetch('/api/auth', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
 
-      const data = await response.json();
+      // Use the global auth manager instead of direct fetch
+      const result = await authManager.authenticate();
 
-      if (!response.ok) {
-        throw new Error(data.error || `Authentication failed with status ${response.status}`);
-      }
-
-      if (data.success && data.token) {
-        setHasInitialized(true);
+      if (result.success && result.token) {
         setAuthState({
           isAuthenticated: true,
           isLoading: false,
           error: null,
-          token: data.token,
+          token: result.token,
         });
       } else {
-        throw new Error('Invalid response from authentication server');
+        setAuthState({
+          isAuthenticated: false,
+          isLoading: false,
+          error: result.error || 'Authentication failed',
+          token: null,
+        });
       }
-      
+
     } catch (error: any) {
-      setHasInitialized(true);
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
@@ -82,6 +69,8 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
   };
 
   const logout = () => {
+    // Clear the global auth manager cache
+    authManager.clearToken();
     setAuthState({
       isAuthenticated: false,
       isLoading: false,
@@ -91,7 +80,6 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
   };
 
   const retry = () => {
-    setHasInitialized(false);
     authenticate();
   };
 
