@@ -60,7 +60,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
     return (
       <div className="space-y-8">
         <div>
-          <h2 className="text-[30px] font-bold text-gray-900 mb-2">Choose Your Service</h2>
+          <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">Choose Your Service</h2>
           <p className="text-gray-600">Loading available services...</p>
         </div>
         <div className="flex justify-center p-8">
@@ -75,7 +75,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
     return (
       <div className="space-y-8">
         <div>
-          <h2 className="text-[30px] font-bold text-gray-900 mb-2">Choose Your Service</h2>
+          <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">Choose Your Service</h2>
           <p className="text-red-600">Error loading services: {servicesError}</p>
         </div>
       </div>
@@ -90,7 +90,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h2 className="text-[30px] font-bold text-gray-900 mb-2">
+        <h2 className="text-[24px] sm:text-[30px] font-bold text-gray-900 mb-1 sm:mb-2">
           Choose Your Service
         </h2>
         <p className="text-gray-600">
@@ -116,7 +116,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
                   transition={{ delay: index * 0.1 }}
                   onClick={() => handleScopeGroupSelect(scopeGroup)}
                   className={cn(
-                    "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                    "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                     selectedScopeGroup?.ScopeGroupId === scopeGroup.ScopeGroupId
                       ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                       : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -164,12 +164,12 @@ export const ServiceSelection = memo(function ServiceSelection() {
                   {availableScopes.map((scope, index) => (
                   <motion.button
                     key={scope.ScopeId}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.1 }}
                     onClick={() => handleScopeSelect(scope)}
                     className={cn(
-                      "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                      "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                       selectedScope?.ScopeId === scope.ScopeId
                         ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                         : "border-gray-400 hover:border-blue-400 text-gray-800"
