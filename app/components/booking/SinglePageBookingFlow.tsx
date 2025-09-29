@@ -1011,12 +1011,12 @@ function SinglePageBookingContent() {
                       {(formData.selectedScope?.Frequencies || []).map((frequency, index) => (
                         <motion.button
                           key={frequency.FrequencyId}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: index * 0.1 }}
                           onClick={() => handleFrequencySelect(frequency)}
                           className={cn(
-                            "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                            "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                             selectedFrequency?.FrequencyId === frequency.FrequencyId
                               ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                               : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -1083,7 +1083,7 @@ function SinglePageBookingContent() {
                                 )}
                                 disabled={isRequired}
                                 className={cn(
-                                  "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                                  "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                                   isSelected 
                                     ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                                     : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -1121,30 +1121,37 @@ function SinglePageBookingContent() {
                   </motion.div>
                 )}
 
-                {/* Service Questions */}
-                {(questions.length > 0 || questionsUnavailable) && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                          <Settings className="w-5 h-5" />
-                          Service Details
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        {questionsUnavailable ? (
-                          <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                            <p className="text-yellow-800">
-                              Service details questions are temporarily unavailable. You can continue with your booking.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-6">
-                          {questions.map((question) => (
+                {/* Service Questions - Split into required and optional */}
+                {(() => {
+                  const requiredQuestions = questions.filter(q => q.IsRequired);
+                  const optionalQuestions = questions.filter(q => !q.IsRequired);
+
+                  return (
+                    <>
+                      {/* Required Questions Card */}
+                      {(requiredQuestions.length > 0 || questionsUnavailable) && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.3 }}
+                        >
+                          <Card>
+                            <CardHeader>
+                              <CardTitle className="flex items-center gap-2">
+                                <Settings className="w-5 h-5" />
+                                Service Details
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              {questionsUnavailable ? (
+                                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                  <p className="text-yellow-800">
+                                    Service details questions are temporarily unavailable. You can continue with your booking.
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 gap-3 sm:gap-6">
+                                {requiredQuestions.map((question) => (
                             <div key={question.QuestionId}>
                               <Label className="text-base font-medium">
                                 {question.QuestionText}
@@ -1256,38 +1263,146 @@ function SinglePageBookingContent() {
                                 <p className="text-red-600 text-sm mt-1">This field is required</p>
                               )}
                             </div>
-                          ))}
-                          </div>
-                        )}
+                                ))}
+                                </div>
+                              )}
 
-                        {/* Calculate Pricing Button */}
-                        <div className="pt-2 sm:pt-4 border-t border-gray-200 mt-3 sm:mt-6">
-                          <Button
-                            onClick={calculatePricing}
-                            disabled={!formData.selectedScope || !selectedFrequency || isPricingLoading}
-                            className="w-full sm:w-auto min-w-[200px]"
-                            size="lg"
-                          >
-                            {isPricingLoading ? (
-                              <>
-                                <motion.div
-                                  animate={{ rotate: 360 }}
-                                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                                  className="w-4 h-4 mr-2"
+                              {/* Calculate Pricing Button */}
+                              <div className="pt-2 sm:pt-4 border-t border-gray-200 mt-3 sm:mt-6">
+                                <Button
+                                  onClick={calculatePricing}
+                                  disabled={!formData.selectedScope || !selectedFrequency || isPricingLoading}
+                                  className="w-full sm:w-auto min-w-[200px]"
+                                  size="lg"
                                 >
-                                  ⚙️
-                                </motion.div>
-                                Calculating...
-                              </>
-                            ) : (
-                              "🧮 Calculate Pricing"
-                            )}
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                )}
+                                  {isPricingLoading ? (
+                                    <>
+                                      <motion.div
+                                        animate={{ rotate: 360 }}
+                                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                        className="w-4 h-4 mr-2"
+                                      >
+                                        ⚙️
+                                      </motion.div>
+                                      Calculating...
+                                    </>
+                                  ) : (
+                                    "🧮 Calculate Pricing"
+                                  )}
+                                </Button>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      )}
+
+                      {/* Optional Questions Card - No title */}
+                      {optionalQuestions.length > 0 && !questionsUnavailable && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.3, delay: 0.1 }}
+                        >
+                          <Card>
+                            <CardContent className="pt-6">
+                              <div className="grid grid-cols-1 gap-3 sm:gap-6">
+                                {optionalQuestions.map((question) => (
+                                  <div key={question.QuestionId}>
+                                    <Label className="text-base font-medium">
+                                      {question.QuestionText}
+                                    </Label>
+
+                                    {question.HelpText && (
+                                      <p className="text-sm text-gray-500 mt-1">
+                                        {question.HelpText}
+                                      </p>
+                                    )}
+
+                                    {/* Handle different question types */}
+                                    {question.QuestionType === "Multiple Select List" ? (
+                                      <MultiSelect
+                                        options={question.Answers.map(answer => ({
+                                          label: answer.AnswerText,
+                                          value: answer.AnswerId.toString()
+                                        }))}
+                                        selected={(questionAnswers[question.QuestionId] || "").split(",").filter(Boolean)}
+                                        onChange={(selectedValues) => handleMultiSelectAnswer(question.QuestionId, selectedValues)}
+                                        placeholder="Select options..."
+                                        className="mt-2"
+                                        isRequired={question.IsRequired}
+                                      />
+                                    ) : question.QuestionType === "Select List" ? (
+                                      <Select
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
+                                      >
+                                        <SelectTrigger className="mt-2">
+                                          <SelectValue placeholder="Select an option" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {question.Answers.map((answer, index) => (
+                                            <SelectItem
+                                              key={`${question.QuestionId}-answer-${index}`}
+                                              value={answer.AnswerId.toString()}
+                                            >
+                                              {answer.AnswerText}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    ) : question.QuestionType === "Whole Number" ? (
+                                      <Input
+                                        type="number"
+                                        step="1"
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                                        placeholder="Enter a number"
+                                        className="mt-2"
+                                      />
+                                    ) : question.QuestionType === "Decimal" ? (
+                                      <Input
+                                        type="number"
+                                        step="0.01"
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                                        placeholder="Enter a decimal number"
+                                        className="mt-2"
+                                      />
+                                    ) : question.QuestionType === "Rich Text" ? (
+                                      <textarea
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                                        placeholder="Enter your notes..."
+                                        className="mt-2 w-full p-3 border border-gray-300 rounded-lg resize-y"
+                                        rows={3}
+                                      />
+                                    ) : question.QuestionText.toLowerCase().includes("phone") ? (
+                                      <Input
+                                        type="tel"
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                                        placeholder="Enter phone number"
+                                        className="mt-2"
+                                      />
+                                    ) : (
+                                      <Input
+                                        type="text"
+                                        value={questionAnswers[question.QuestionId] || ""}
+                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
+                                        placeholder="Enter your answer"
+                                        className="mt-2"
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      )}
+                    </>
+                  );
+                })()}
               </>
             )}
           </div>
@@ -1399,7 +1514,7 @@ function SinglePageBookingContent() {
                                 key={dateString}
                                 onClick={() => handleDateSelect(dateString)}
                                 className={cn(
-                                  "p-3 rounded-lg border-2 transition-all text-sm",
+                                  "p-3 rounded-lg border-2 text-sm",
                                   isSelected
                                     ? "border-blue-600 bg-blue-50 text-blue-700"
                                     : "border-gray-300 hover:border-blue-400"

@@ -142,7 +142,7 @@ export const ScheduleSection = memo<ScheduleSectionProps>(({
                     key={dateString}
                     onClick={() => onDateSelect(dateString)}
                     className={cn(
-                      "p-3 rounded-lg border-2 transition-all text-sm",
+                      "p-3 rounded-lg border-2 text-sm",
                       isSelected
                         ? "border-blue-600 bg-blue-50 text-blue-700"
                         : "border-gray-300 hover:border-blue-400"
@@ -221,12 +221,12 @@ export const FrequencySection = memo<FrequencySectionProps>(({
           {frequencies.map((frequency, index) => (
             <motion.button
               key={frequency.FrequencyId}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
               onClick={() => onFrequencySelect(frequency)}
               className={cn(
-                "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                 selectedFrequency?.FrequencyId === frequency.FrequencyId
                   ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                   : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -310,7 +310,7 @@ export const AddOnsSection = memo<AddOnsSectionProps>(({
                   )}
                   disabled={isRequired}
                   className={cn(
-                    "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
+                    "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
                     isSelected 
                       ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                       : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -436,7 +436,7 @@ export const QuestionsSection = memo<QuestionsSectionProps>(({
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-6">
             {questions.map((question) => (
               <div key={question.QuestionId}>
                 <Label className="text-base font-medium">
