@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { Card, CardContent } from '@/app/components/ui/card';
 
 interface AuthState {
@@ -28,30 +28,22 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
     error: null,
     token: null,
   });
-  const [hasInitialized, setHasInitialized] = useState(false);
 
-  const authenticate = async () => {
-    // Prevent multiple authentication attempts
-    if (hasInitialized) {
-      return;
-    }
-    
+  // Use a ref instead of state for the in-flight guard so the authenticate
+  // callback's identity stays stable across renders.
+  const hasInitializedRef = useRef(false);
+
+  const authenticate = useCallback(async () => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+
     try {
-      setAuthState(prev => ({ 
-        ...prev, 
-        isLoading: true, 
-        error: null
-      }));
-      
-      
-      // Call our server-side API route that has access to secure env variables
+      setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
+
       const response = await fetch('/api/auth', {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -59,7 +51,6 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
       }
 
       if (data.success && data.token) {
-        setHasInitialized(true);
         setAuthState({
           isAuthenticated: true,
           isLoading: false,
@@ -69,36 +60,29 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
       } else {
         throw new Error('Invalid response from authentication server');
       }
-      
-    } catch (error: any) {
-      setHasInitialized(true);
+    } catch (error: unknown) {
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
-        error: error.message || 'Failed to authenticate with MaidCentral',
+        error: error instanceof Error ? error.message : 'Failed to authenticate with MaidCentral',
         token: null,
       });
     }
-  };
+  }, []);
 
-  const logout = () => {
-    setAuthState({
-      isAuthenticated: false,
-      isLoading: false,
-      error: null,
-      token: null,
-    });
-  };
+  const logout = useCallback(() => {
+    hasInitializedRef.current = false;
+    setAuthState({ isAuthenticated: false, isLoading: false, error: null, token: null });
+  }, []);
 
-  const retry = () => {
-    setHasInitialized(false);
+  const retry = useCallback(() => {
+    hasInitializedRef.current = false;
     authenticate();
-  };
+  }, [authenticate]);
 
-  // Automatically authenticate on mount
   useEffect(() => {
     authenticate();
-  }, []);
+  }, [authenticate]);
 
   const contextValue: AuthContextType = {
     ...authState,

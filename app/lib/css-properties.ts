@@ -226,23 +226,3 @@ export function debouncedUpdateThemeProperties(
   }, delay)
 }
 
-/**
- * Hook-friendly CSS property injection with cleanup
- */
-export function useThemePropertiesEffect(
-  themeColors: Partial<ThemeColors>,
-  cleanup: () => void
-): void {
-  if (typeof document === 'undefined') {
-    return
-  }
-
-  try {
-    // Inject properties
-    injectThemeProperties(themeColors)
-
-    // Return cleanup function
-    return cleanup
-  } catch (error) {
-  }
-}

@@ -1,183 +1,81 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (or any AI assistant) when working in this repository.
 
-## ⚠️ CRITICAL API RULES
+## Critical API rules
 
-**NEVER make up or assume API endpoints exist!**
-- ALL external API endpoints must be confirmed by the user
-- ONLY use endpoints documented in `/API_ENDPOINTS.md`
-- When an endpoint is needed, ASK the user for the correct endpoint
-- Do NOT guess endpoint paths based on patterns or conventions
-- All MaidCentral API endpoints must be explicitly provided
+**Never invent MaidCentral API endpoints.** All MaidCentral endpoints in use are
+enumerated in `API_ENDPOINTS.md`. If you need a new endpoint, ask the user for
+the correct URL rather than guessing from naming conventions.
 
-## Project Overview
+## Project overview
 
-MaidCentral Booking Tool - A Next.js 15.5.0 application built with React 19, TypeScript 5, and Tailwind CSS v4 for managing booking functionality.
+MaidCentral Booking Tool — a Next.js 15 / React 19 / TypeScript 5 sample
+application that demonstrates how to build a customer-facing booking form
+against the MaidCentral API. Tailwind CSS v4 for styling, Radix UI + shadcn-
+style primitives for components.
 
-## Development Commands
+## Development commands
 
 ```bash
-# Install dependencies
-npm install
-
-# Run development server with Turbopack
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
-
-# Run linting
-npm run lint
+npm install        # install dependencies
+npm run dev        # run dev server (Turbopack)
+npm run build      # production build
+npm start          # start production server
+npm run lint       # ESLint
+npm test           # Jest
 ```
 
 ## Architecture
 
-### Technology Stack
-- **Framework**: Next.js 15.5.0 with App Router
-- **UI Library**: React 19.1.0
-- **Language**: TypeScript 5
-- **Styling**: Tailwind CSS v4 with PostCSS
-- **Build Tool**: Turbopack (enabled for faster builds)
-- **Code Quality**: ESLint v9 with Next.js configuration
-
-### Project Structure
 ```
-/app                 # Next.js App Router directory
-  ├── layout.tsx     # Root layout wrapper
-  ├── page.tsx       # Home page component
-  ├── globals.css    # Global styles with Tailwind imports
-  ├── components/    # Reusable React components
-  ├── pages/         # Additional page components
-  └── services/      # Business logic and API services
-```
-
-### Key Conventions
-- **Import Alias**: Use `@/*` for root-level imports (e.g., `import { Component } from '@/app/components/Component'`)
-- **TypeScript**: Strict mode enabled, ensure proper typing for all components and functions
-- **Styling**: Use Tailwind CSS utility classes; custom styles in component-specific CSS modules if needed
-- **Components**: Place in `/app/components/` with PascalCase naming
-
-### Development Notes
-- Turbopack is enabled for faster development builds
-- CSS uses modern Tailwind v4 syntax with `@import "tailwindcss"`
-- No test framework currently configured - consider adding Jest or Vitest when needed
-- Project uses React 19 and Next.js 15 - ensure compatibility when adding dependencies
-
-## Agent Workflow System
-
-### Overview
-This project includes specialized AI agents to enhance development productivity and code quality. The workflow automatically optimizes prompts and delegates tasks to specialized agents.
-
-### Available Agents
-
-#### 1. UI/UX Specialist Agent
-- **Purpose**: Creates beautiful, accessible UI components using Next.js and Metronic
-- **Activation**: Automatically triggered by UI-related keywords (component, design, layout, etc.)
-- **Features**: Figma integration, accessibility compliance, responsive design patterns
-- **Documentation**: `/agents/ui-ux-specialist.md`
-
-#### 2. Prompt Optimizer Agent  
-- **Purpose**: Automatically enhances all prompts for maximum clarity and context
-- **Activation**: Runs on every prompt before execution (can bypass with `[raw]` prefix)
-- **Features**: Context enrichment, task decomposition, requirement clarification
-- **Documentation**: `/agents/prompt-optimizer.md`
-
-#### 3. Workflow Orchestrator
-- **Purpose**: Coordinates multiple agents for complex multi-step tasks
-- **Features**: Parallel execution, conditional routing, error recovery
-- **Documentation**: `/agents/workflow-orchestrator.md`
-
-### Agent Commands
-```bash
-# Run specific agents
-npm run agent:ui          # UI/UX specialist
-npm run agent:optimize     # Prompt optimizer
-npm run agent:workflow     # Workflow orchestrator
-
-# Start MCP servers
-npm run mcp:start         # All MCP servers
-npm run mcp:figma         # Figma integration
-npm run mcp:browser       # Browser automation
-
-# Execute workflows
-npm run workflow:component     # UI component creation
-npm run workflow:feature      # Feature implementation
-npm run workflow:optimize     # Performance optimization
+app/
+  api/               Next.js route handlers
+    auth/            server-side token fetch (keeps API_KEY off the client)
+    lead/
+      create-or-update/   optional proxy for lead creation
+  components/
+    booking/         booking flow — `SinglePageBookingFlow` is the main entry point
+    ui/              Radix-based shared UI primitives
+  contexts/          BookingContext manages form + pricing state
+  hooks/             Data-fetching and utility hooks
+  lib/
+    config/          env helpers (`api-url.ts` is the single URL source of truth)
+  services/
+    api/             MaidCentral API client modules
+      fetch-utils.ts        fetch wrapper with timeout + bearer auth
+      booking-data.ts       scope groups, questions, availability, price calculation
+      lead.ts               lead + quote creation
+      bookquote.ts          booking confirmation
+      http-client.ts        axios client (used by cache-manager consumers)
+      cache-manager.ts      in-memory response cache
+  types/             shared TypeScript types
 ```
 
-### Workflow Automation
+## Conventions
 
-#### Automatic Prompt Optimization
-Every prompt you submit is automatically:
-1. Analyzed for intent and context
-2. Enhanced with project-specific information
-3. Broken down into actionable subtasks
-4. Enriched with technical requirements
+- Import alias `@/*` maps to repo root — use `@/app/...` for app-relative imports.
+- TypeScript strict mode is on. Annotate return types on exported functions.
+- Components live in `app/components/` and use PascalCase filenames.
+- Tailwind utilities only; no CSS modules. Class order follows Radix + shadcn patterns.
+- Every API base URL reads from `app/lib/config/api-url.ts`. Do not re-introduce
+  scattered `process.env.NEXT_PUBLIC_API_BASE_URL || 'https://…'` fallbacks.
 
-To bypass optimization, prefix your prompt with:
-- `[raw]` - Skip all optimization
-- `[minimal]` - Light optimization only
-- `[expert]` - Assume context is known
+## Environment variables
 
-#### UI Component Workflow
-When creating UI components, the system:
-1. Optimizes your prompt with UI/UX requirements
-2. Researches current design trends
-3. Generates accessible, performant components
-4. Follows Metronic design patterns
-5. Includes proper TypeScript types
-6. Adds loading and error states
+See `.env.example`. The important ones:
 
-### Configuration
+- `API_USERNAME` / `API_KEY` — server-only credentials used by `app/api/auth/route.ts`.
+- `NEXT_PUBLIC_API_BASE_URL` — MaidCentral API host (required; the app throws at
+  startup if unset).
 
-#### MCP Servers
-Configured in `.mcp.json`:
-- **figma**: Design-to-code conversion
-- **browser**: UI testing automation
-- **prompt-optimizer**: Prompt enhancement
-- **web-research**: UI/UX trend research
-- **git**: Workflow automation
+## When editing this codebase
 
-#### Environment Variables
-Required environment variables in `.env.local`:
-```bash
-FIGMA_PERSONAL_ACCESS_TOKEN=    # For Figma integration
-ANTHROPIC_API_KEY=               # For prompt optimization
-```
-
-See `.env.example` for complete list.
-
-### Prompt Templates
-Pre-configured templates in `/prompts/templates.json` for:
-- Component creation
-- Bug fixes
-- Feature implementation
-- Refactoring
-- Testing
-- API development
-- Performance optimization
-
-### Best Practices
-
-#### Working with Agents
-1. Let the prompt optimizer enhance your requests automatically
-2. Use specific keywords to trigger specialized agents
-3. For complex tasks, let the workflow orchestrator handle coordination
-4. Review agent documentation in `/agents/` for capabilities
-
-#### UI/UX Development
-1. Reference Figma designs when available
-2. Follow Metronic component patterns
-3. Ensure WCAG 2.1 AA accessibility
-4. Test responsive layouts
-5. Include loading and error states
-
-#### Performance Considerations
-1. Agents run in parallel when possible
-2. Results are cached to avoid redundant work
-3. MCP servers start on-demand
-4. Workflows have built-in retry logic
+- Keep logs intentional. Don't re-introduce debug `console.log` or emoji-laden
+  performance instrumentation — the code was recently stripped of it.
+- When a change affects auth, lead creation, quote creation, or booking, note
+  whether server-side (`app/api/...`) or client-side (`app/services/api/...`)
+  code owns the change; they have different concerns (credential handling vs.
+  UI state).
+- Payment tokenization uses CardConnect — partners on a different gateway will
+  need to replace `CardConnectTokenizer.tsx` and `app/config/cardconnect.ts`.

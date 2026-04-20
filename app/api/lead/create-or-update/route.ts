@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { LeadCreateRequest } from '@/app/types/api'
-
-const API_BASE_URL = process.env.MAIDCENTRAL_API_URL || 'https://api.maidcentral.net'
+import { LeadCreateRequest } from '@/app/types/api/lead'
+import { API_BASE_URL } from '@/app/lib/config/api-url'
 const API_USERNAME = process.env.MAIDCENTRAL_USERNAME || ''
 const API_PASSWORD = process.env.MAIDCENTRAL_PASSWORD || ''
 const API_PHONE_CODE = process.env.MAIDCENTRAL_PHONE_CODE || ''

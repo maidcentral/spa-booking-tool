@@ -3,6 +3,8 @@
  * Provides type-safe access to environment variables with proper defaults
  */
 
+import { API_BASE_URL } from './api-url';
+
 export interface EnvConfig {
   /**
    * Determines the layout mode for the booking flow
@@ -60,9 +62,9 @@ export function getEnvConfig(): EnvConfig {
   return {
     multiStepLayout: parseBoolean(
       process.env.NEXT_PUBLIC_MULTI_STEP_LAYOUT,
-      true // Default to multi-step layout for backward compatibility
+      false // Single-page is the default; set NEXT_PUBLIC_MULTI_STEP_LAYOUT=true for the wizard.
     ),
-    apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.maidcentral.net',
+    apiBaseUrl: API_BASE_URL,
     apiMockingEnabled: parseBoolean(
       process.env.NEXT_PUBLIC_API_MOCKING_ENABLED,
       false

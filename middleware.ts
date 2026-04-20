@@ -21,7 +21,7 @@ export function middleware(request: NextRequest) {
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // Allow Google Fonts and inline styles for theming
       "font-src 'self' https://fonts.gstatic.com data:",
       "img-src 'self' data: https:",
-      "connect-src 'self' https://api.maidcentral.net https://mccleaners.maidcentral.net" + (isDevelopment ? " ws: wss: http://localhost:* https://localhost:*" : ""), // Allow MaidCentral API and dev server connections
+      "connect-src 'self' https://api.maidcentral.com https://api.maidcentral.net" + (isDevelopment ? " ws: wss: http://localhost:* https://localhost:*" : ""), // Allow MaidCentral API (prod + staging) and dev server connections
       "frame-ancestors " + (isDevelopment ? "*" : "*"), // Allow embedding in any iframe (required for partner sites)
       "frame-src 'self' https://fts-uat.cardconnect.com https://fts.cardconnect.com", // Allow CardConnect payment iframes
       "object-src 'none'",

@@ -1,30 +1,19 @@
 import '@testing-library/jest-dom';
 
-// Mock MSW for tests
-global.TextEncoder = TextEncoder;
-global.TextDecoder = TextDecoder;
+// Required by the app's api-url module (throws at import time if unset).
+process.env.NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL
+  || 'https://api.maidcentral.com';
 
-// Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: jest.fn().mockImplementation(query => ({
+  value: jest.fn().mockImplementation((query) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: jest.fn(), // deprecated
-    removeListener: jest.fn(), // deprecated
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
     addEventListener: jest.fn(),
     removeEventListener: jest.fn(),
     dispatchEvent: jest.fn(),
   })),
-});
-
-// Mock console.warn for auth token warnings
-const originalWarn = console.warn;
-beforeAll(() => {
-  console.warn = jest.fn();
-});
-
-afterAll(() => {
-  console.warn = originalWarn;
 });
