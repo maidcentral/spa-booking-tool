@@ -3,19 +3,21 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
 import { CreditCard } from "lucide-react"
-import { cardConnectConfig, isUATEnvironment, testCards, buildTokenizerUrl } from "@/app/config/cardconnect"
-
-interface TokenizationResponse {
-  message: string  // The token
-  expiry?: string  // MMYY format
-  error?: string   // Error message if tokenization fails
-}
+import { buildTokenizerUrl } from "@/app/config/cardconnect"
 
 interface CardConnectTokenizerProps {
   onTokenReceived: (token: string, expiry: string) => void
   onError: (error: string) => void
   disabled?: boolean
 }
+
+/**
+ * Stale-iframe recovery pattern: the CardConnect iframe holds cached CVV state
+ * that can wedge tokenization after a validation-failure retry. When a booking
+ * attempt fails, the parent should bump a numeric key on this component — React
+ * will unmount the iframe and mount a fresh one. Mirrors the internal fix in
+ * commit bffa5bca2 (see docs/online-booking-form/04-react-build-spec.md §8).
+ */
 
 export function CardConnectTokenizer({
   onTokenReceived,
@@ -41,35 +43,20 @@ export function CardConnectTokenizer({
         "https://fts.cardconnect.com"
       ]
 
-      if (!allowedOrigins.includes(event.origin)) {
-        // Unauthorized origin detected
-        return
-      }
+      if (!allowedOrigins.includes(event.origin)) return
 
       try {
-        // Simplified parsing per official docs
         const token = JSON.parse(event.data)
-
         if (token.message) {
-          // Clear any previous errors
           setTokenizationError(null)
-
-          // Update payment token state
           setPaymentToken(token.message)
 
-          // Update hidden input field per official docs
           const hiddenInput = document.getElementById('mytoken') as HTMLInputElement
-          if (hiddenInput) {
-            hiddenInput.value = token.message
-          }
+          if (hiddenInput) hiddenInput.value = token.message
 
-          // Token received successfully
-
-          // Call callback with token and expiry
           onTokenReceived(token.message, token.expiry || "")
         }
-      } catch (error) {
-        // Error parsing tokenization response
+      } catch {
         const errorMessage = "Tokenization failed"
         setTokenizationError(errorMessage)
         onError(errorMessage)
@@ -87,7 +74,6 @@ export function CardConnectTokenizer({
 
   const handleIframeLoad = () => {
     setIsLoading(false)
-    // CardConnect iFrame loaded successfully
   }
 
   const handleIframeError = () => {
@@ -95,12 +81,6 @@ export function CardConnectTokenizer({
     const errorMessage = "Failed to load payment form"
     setTokenizationError(errorMessage)
     onError(errorMessage)
-  }
-
-  // Utility function to get token from hidden input (per official docs)
-  const getTokenFromForm = (): string | null => {
-    const hiddenInput = document.getElementById('mytoken') as HTMLInputElement
-    return hiddenInput?.value || null
   }
 
   return (

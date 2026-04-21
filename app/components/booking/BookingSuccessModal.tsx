@@ -11,7 +11,6 @@ interface BookingSuccessModalProps {
   onClose: () => void
   customerEmail: string
   leadId?: number | null
-  quoteId?: string | null
   selectedService?: string
   selectedDate?: Date | null
   selectedTime?: string
@@ -23,11 +22,10 @@ export function BookingSuccessModal({
   onClose,
   customerEmail,
   leadId,
-  quoteId,
   selectedService,
   selectedDate,
   selectedTime,
-  zipCode
+  zipCode,
 }: BookingSuccessModalProps) {
   const formatDate = (date: Date | null) => {
     if (!date) return 'Not selected'

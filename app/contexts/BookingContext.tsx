@@ -2,16 +2,19 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useMemo } from "react"
 import { BookingFormData, BookingContextType, BookingStep, BookingPricing, LineItem } from "@/app/types/booking"
-import { mockFrequencyOptions } from "@/app/lib/mockData"
-import { bookingDataService, PriceCalculationRequest, PriceCalculationResponse, PriceCalculationResult, QuestionData, Question } from "@/app/services/api/booking-data"
+import {
+  bookingDataService,
+  PriceCalculationRequest,
+  PriceCalculationResponse,
+  QuestionData,
+  Question,
+  ScopeOfWork,
+  RateModification,
+  Frequency,
+} from "@/app/services/api/booking-data"
 
-// Initial booking data
 const initialBookingData: BookingFormData = {
-  pricingParameters: {},
   zipCode: "",
-  selectedExtras: [],
-  frequency: mockFrequencyOptions[0], // One-time as default
-  customFields: {},
   customer: {
     firstName: "",
     lastName: "",
@@ -30,6 +33,10 @@ const initialBookingData: BookingFormData = {
       sameAsService: true,
     },
   },
+  selectedScopes: [],
+  utm: {},
+  smsConsentTransactional: false,
+  smsConsentMarketing: false,
   pricing: {
     lineItems: [],
     subtotal: 0,
@@ -37,6 +44,11 @@ const initialBookingData: BookingFormData = {
     fees: 0,
     taxes: 0,
     total: 0,
+    baseFee: 0,
+    totalHours: 0,
+    firstJobTotal: 0,
+    recurringTotal: 0,
+    perScope: {},
   },
 }
 
@@ -127,149 +139,155 @@ const generateAutoAnswers = (questions: QuestionData[]): Question[] => {
     });
 };
 
-// Helper function to build price calculation request
-const buildPriceCalculationRequest = (
-  formData: BookingFormData, 
-  questions: Question[] = [],
-  selectedModifications: Record<number, number> = {},
-  rateModifications: any[] = []
-): PriceCalculationRequest => {
-
-  // Build rate modifications array from selected modifications
-
-  const rateModsArray = Object.entries(selectedModifications)
-    .filter(([_, quantity]) => quantity > 0)
+// Build a rate-mod request entry for one scope.
+const buildRateModsForScope = (
+  selectedMods: Record<number, number> | undefined,
+  rateModifications: RateModification[],
+  isFrequencyRecurring: boolean
+) => {
+  return Object.entries(selectedMods ?? {})
+    .filter(([, quantity]) => quantity > 0)
     .map(([modId, quantity]) => {
       const modIdInt = parseInt(modId);
       const rateMod = rateModifications.find(rm => rm.RateModificationId === modIdInt);
-
-      // Find the rate modification details
-
-      // Build the rate modification object according to API spec
-      const modRequest: any = {
+      const modRequest: {
+        Quantity: number;
+        RateModificationId: number;
+        IsRecurring?: boolean;
+        RateModificationFrequencyId?: number;
+      } = {
         Quantity: quantity,
-        RateModificationId: modIdInt
+        RateModificationId: modIdInt,
       };
-      
-      // Add IsRecurring if the modification is recurring
-      // Only set IsRecurring to true if:
-      // 1. The selected frequency is recurring (not 'S')
-      // 2. The rate modification supports recurring (IsRecurring is true)
-      const isFrequencyRecurring = formData.selectedFrequency?.FrequencyId !== 'S';
-      const isModificationRecurring = rateMod?.IsRecurring === true;
-      
-      if (isFrequencyRecurring && isModificationRecurring) {
+      if (isFrequencyRecurring && rateMod?.IsRecurring === true) {
         modRequest.IsRecurring = true;
       }
-      
-      // Add RateModificationFrequencyId if provided and not recurring
       if (!modRequest.IsRecurring && rateMod?.RateModificationFrequencyId) {
         modRequest.RateModificationFrequencyId = rateMod.RateModificationFrequencyId;
       }
-      
       return modRequest;
     });
-  
-  
-  // Build the request according to the exact API specification
-  const request: PriceCalculationRequest = {
-    ScopeGroupId: formData.selectedScopeGroup?.ScopeGroupId || 0,
-    ScopesOfWork: [
-      {
-        ScopeOfWorkId: formData.selectedScope?.ScopeId || 0,
-        FrequencyId: formData.selectedFrequency?.FrequencyId || ""
-      }
-    ],
-    Questions: questions
-  };
-  
-  // Only add RateModifications if there are any
-  if (rateModsArray.length > 0) {
-    request.ScopesOfWork[0].RateModifications = rateModsArray;
-  }
-
-  // Return the complete pricing request
-
-  return request;
 };
 
-// Helper function to process API response into LineItems
+// Build the multi-scope CalculatePrice request. Falls back to the legacy
+// single-scope fields when the caller hasn't migrated to the `*ByScope` records
+// yet — keeps the single-page flow working through the transition.
+const buildPriceCalculationRequest = (
+  formData: BookingFormData,
+  questions: Question[] = [],
+  selectedModifications: Record<number, number> = {},
+  rateModifications: RateModification[] = [],
+  currentState?: {
+    frequencyByScope?: Record<number, Frequency>
+    modsByScope?: Record<number, Record<number, number>>
+  }
+): PriceCalculationRequest => {
+  const scopes = formData.selectedScopes?.length
+    ? formData.selectedScopes
+    : formData.selectedScope
+    ? [formData.selectedScope]
+    : [];
+
+  const frequencyByScope = currentState?.frequencyByScope;
+  const modsByScope = currentState?.modsByScope;
+
+  const scopesOfWork = scopes.map(scope => {
+    const freq =
+      frequencyByScope?.[scope.ScopeId] ??
+      (formData.selectedScope?.ScopeId === scope.ScopeId ? formData.selectedFrequency : undefined);
+    const mods = modsByScope?.[scope.ScopeId] ?? selectedModifications;
+    const isFrequencyRecurring = freq?.FrequencyId !== undefined && freq?.FrequencyId !== 'S';
+    const rateMods = buildRateModsForScope(mods, rateModifications, isFrequencyRecurring);
+    const entry: ScopeOfWork = {
+      ScopeOfWorkId: scope.ScopeId,
+      FrequencyId: freq?.FrequencyId || '',
+    };
+    if (rateMods.length > 0) {
+      entry.RateModifications = rateMods;
+    }
+    return entry;
+  });
+
+  return {
+    ScopeGroupId: formData.selectedScopeGroup?.ScopeGroupId || 0,
+    ScopesOfWork: scopesOfWork,
+    Questions: questions,
+  };
+};
+
+// Process a multi-scope CalculatePrice response into a BookingPricing record.
+// The API returns one entry per scope in Result[], each with its own Frequencies
+// array — we take the first frequency (the one the visitor selected for that
+// scope) and aggregate across scopes.
 const processApiResponseToLineItems = (response: PriceCalculationResponse): BookingPricing => {
   if (!response.Result || response.Result.length === 0) {
     throw new Error('No pricing results in API response');
   }
 
-  const result = response.Result[0];
-  if (!result.Frequencies || result.Frequencies.length === 0) {
-    throw new Error('No frequency pricing in API response');
+  const lineItems: LineItem[] = [];
+  const perScope: Record<number, import('@/app/types/booking').PerScopePricing> = {};
+  let subtotal = 0;
+  let baseFeeTotal = 0;
+  let totalHours = 0;
+  let firstJobTotal = 0;
+  let recurringTotal = 0;
+
+  for (const result of response.Result) {
+    if (!result.Frequencies || result.Frequencies.length === 0) continue;
+    const frequency = result.Frequencies[0];
+
+    // AdjustedBaseCost is the post-modification price the customer sees.
+    // CalculatedBaseCost is the pre-modification value sent as BaseFee on BookQuote.
+    const adjustedCost = frequency.AdjustedBaseCost ?? frequency.CalculatedBaseCost ?? 0;
+    const baseFee = frequency.CalculatedBaseCost ?? 0;
+    const hours =
+      frequency.TotalRecurringHours ||
+      frequency.TotalFirstJobHours ||
+      frequency.TotalBaseHours ||
+      0;
+
+    subtotal += adjustedCost;
+    baseFeeTotal += baseFee;
+    totalHours += hours;
+    firstJobTotal += frequency.TotalFirstJobCost ?? 0;
+    recurringTotal += frequency.TotalRecurringCost ?? 0;
+
+    lineItems.push({
+      id: `scope-${result.ScopeOfWorkId}`,
+      name: result.ScopeName || 'Service',
+      description: frequency.FrequencyName,
+      quantity: 1,
+      unitPrice: adjustedCost,
+      totalPrice: adjustedCost,
+      type: 'service',
+    });
+
+    perScope[result.ScopeOfWorkId] = {
+      scopeId: result.ScopeOfWorkId,
+      scopeName: result.ScopeName || 'Service',
+      frequencyId: frequency.FrequencyId,
+      frequencyName: frequency.FrequencyName,
+      baseFee,
+      adjustedBaseCost: adjustedCost,
+      totalFirstJobCost: frequency.TotalFirstJobCost ?? 0,
+      totalRecurringCost: frequency.TotalRecurringCost ?? 0,
+      totalHours: hours,
+    };
   }
 
-  const frequency = result.Frequencies[0];
-  
-  
-  const lineItems: LineItem[] = [];
-  
-  // Key pricing values from API with fallbacks
-  const baseCalculatedCost = frequency.CalculatedBaseCost || 0;
-  const finalAdjustedCost = frequency.AdjustedBaseCost || frequency.CalculatedBaseCost || 0;
-  
-  // Try multiple fields for final total, with manual calculation as fallback
-  let finalTotalCost = frequency.TotalRecurringCost || frequency.TotalFirstJobCost || frequency.AdjustedBaseCost;
-  
-
-  // Add base service line item (using the raw calculated cost)
-  lineItems.push({
-    id: 'base-service',
-    name: result.ScopeName || 'Service',
-    description: frequency.FrequencyName,
-    quantity: 1,
-    unitPrice: baseCalculatedCost,
-    totalPrice: baseCalculatedCost,
-    type: 'service'
-  });
-
-  // Add rate modifications as separate line items
-  frequency.RateModifications.forEach(modification => {
-    lineItems.push({
-      id: `modification-${modification.RateModificationId}`,
-      name: modification.Name,
-      description: modification.IsRecurring ? 'Recurring adjustment' : 'One-time adjustment',
-      quantity: modification.Quantity,
-      unitPrice: modification.CalculatedCost,
-      totalPrice: modification.CalculatedCost,
-      type: modification.CalculatedCost < 0 ? 'discount' : 'fee'
-    });
-  });
-
-  // Calculate discounts and fees from rate modifications only
-  const rateModDiscounts = frequency.RateModifications
-    .filter(mod => mod.CalculatedCost < 0)
-    .reduce((sum, mod) => sum + Math.abs(mod.CalculatedCost), 0);
-
-  const rateModFees = frequency.RateModifications
-    .filter(mod => mod.CalculatedCost > 0)
-    .reduce((sum, mod) => sum + mod.CalculatedCost, 0);
-
-  // Use rate modification totals directly (no automatic adjustments)
-  const totalDiscounts = rateModDiscounts;
-  const totalFees = rateModFees;
-
-  // Always calculate total from line items to ensure accuracy
-  const calculatedTotal = lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
-  
-  // Use calculated total from line items instead of API total fields
-  finalTotalCost = calculatedTotal;
-
-  const pricingResult = {
+  return {
     lineItems,
-    subtotal: baseCalculatedCost,           // Base calculation
-    discounts: totalDiscounts,              // All discounts from rate modifications
-    fees: totalFees,                        // All fees from rate modifications
-    taxes: 0,                               // API doesn't include taxes separately
-    total: finalTotalCost                   // Total calculated from sum of all line items
+    subtotal,
+    discounts: 0,
+    fees: 0,
+    taxes: 0,
+    total: subtotal,
+    baseFee: baseFeeTotal,
+    totalHours,
+    firstJobTotal,
+    recurringTotal,
+    perScope,
   };
-  
-  return pricingResult;
 };
 
 // Fallback pricing calculation (when API is not available)
@@ -282,6 +300,11 @@ const calculateFallbackPricing = (formData: BookingFormData): BookingPricing => 
     fees: 0,
     taxes: 0,
     total: 0,
+    baseFee: 0,
+    totalHours: 0,
+    firstJobTotal: 0,
+    recurringTotal: 0,
+    perScope: {},
   }
 }
 
@@ -390,47 +413,73 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   const calculatePricingAsync = useCallback(async (authToken: string, currentState?: {
     selectedModifications?: Record<number, number>
     questionAnswers?: Record<number, string>
-    rateModifications?: any[]
+    rateModifications?: RateModification[]
+    // New multi-scope inputs. When present, these take precedence over the
+    // legacy single-scope fields; the request builder iterates `selectedScopes`
+    // and pairs each with its frequency + mods.
+    frequencyByScope?: Record<number, Frequency>
+    modsByScope?: Record<number, Record<number, number>>
   }) => {
     // Get fresh state data
     const currentFormData = state.formData;
-    
-    // Only calculate if we have required data
-    if (!currentFormData.selectedScopeGroup || !currentFormData.selectedScope || !currentFormData.selectedFrequency) {
+
+    // Multi-scope readiness: every selected scope must have a frequency.
+    const multiScopes = currentFormData.selectedScopes ?? [];
+    const multiReady =
+      multiScopes.length > 0 &&
+      !!currentFormData.selectedScopeGroup &&
+      multiScopes.every(s => !!currentState?.frequencyByScope?.[s.ScopeId]);
+    // Legacy single-scope fallback for the single-page flow that hasn't migrated.
+    const singleReady =
+      !!currentFormData.selectedScopeGroup &&
+      !!currentFormData.selectedScope &&
+      !!currentFormData.selectedFrequency;
+    if (!multiReady && !singleReady) {
       return;
     }
 
     try {
       dispatch({ type: "SET_PRICING_LOADING", payload: true });
 
-      // Step 1: Try to fetch questions and use real user answers if available
+      // Step 1: Try to fetch questions and use real user answers if available.
+      // In multi-scope mode fetch questions for every selected scope.
       let questionsForPricing: Question[] = [];
       try {
-        const scopeIds = [currentFormData.selectedScope.ScopeId];
-        const questionsResponse = await bookingDataService.getQuestions(authToken, scopeIds);
-        
-        if (questionsResponse.IsSuccess !== false && questionsResponse.Result) {
-          // If we have actual user answers, use them; otherwise fall back to auto-generated
-          if (currentState?.questionAnswers) {
-            questionsForPricing = questionsResponse.Result
-              .filter(q => currentState.questionAnswers![q.QuestionId])
-              .map(q => ({
-                QuestionId: q.QuestionId,
-                Answer: currentState.questionAnswers![q.QuestionId]
-              }));
-          } else {
-            questionsForPricing = generateAutoAnswers(questionsResponse.Result);
+        const scopeIds = multiReady
+          ? multiScopes.map(s => s.ScopeId)
+          : currentFormData.selectedScope
+          ? [currentFormData.selectedScope.ScopeId]
+          : [];
+        if (scopeIds.length > 0) {
+          const questionsResponse = await bookingDataService.getQuestions(authToken, scopeIds);
+          if (questionsResponse.IsSuccess !== false && questionsResponse.Result) {
+            if (currentState?.questionAnswers) {
+              questionsForPricing = questionsResponse.Result
+                .filter(q => currentState.questionAnswers![q.QuestionId])
+                .map(q => ({
+                  QuestionId: q.QuestionId,
+                  Answer: currentState.questionAnswers![q.QuestionId]
+                }));
+            } else {
+              questionsForPricing = generateAutoAnswers(questionsResponse.Result);
+            }
           }
         }
-      } catch (error) {
+      } catch {
+        // Non-fatal — the API will just return "missing required questions" if
+        // any server-side defaults aren't configured, and the UI surfaces it.
       }
-      
+
       // Step 2: Build pricing request with current data and actual selections
       const request = buildPriceCalculationRequest(
-        currentFormData, 
+        currentFormData,
         questionsForPricing,
         currentState?.selectedModifications || {},
-        currentState?.rateModifications || []
+        currentState?.rateModifications || [],
+        {
+          frequencyByScope: currentState?.frequencyByScope,
+          modsByScope: currentState?.modsByScope,
+        }
       );
       
       // Step 3: Call pricing API
@@ -448,6 +497,20 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       try {
         const pricing = processApiResponseToLineItems(response);
         dispatch({ type: "SET_PRICING", payload: pricing });
+        // Non-blocking: surface the recalculated totals to partner analytics.
+        // The Partner configures window.mcBookingTrack to consume these.
+        if (typeof window !== "undefined" && window.mcBookingTrack) {
+          try {
+            window.mcBookingTrack({
+              type: "booking_price_recalculated",
+              firstJobTotal: pricing.firstJobTotal,
+              recurringTotal: pricing.recurringTotal,
+              totalHours: pricing.totalHours,
+            });
+          } catch {
+            /* swallow partner analytics errors */
+          }
+        }
       } catch (processingError) {
         throw processingError;
       }

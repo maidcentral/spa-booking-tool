@@ -1,248 +1,125 @@
-# MaidCentral Partner Setup Guide
+# Partner setup guide
 
-This guide will help you set up your own instance of the MaidCentral Booking Tool for your cleaning service business.
+Shortest path from zero to a working booking form.
 
 ## Prerequisites
 
-- Node.js 18+ installed
-- Valid MaidCentral partner credentials
-- Access to your registered phone for SMS verification
+- Node.js 18 or newer
+- MaidCentral partner API credentials (request from `support@maidcentral.com`
+  — these are machine credentials, not your user login)
 
-## Quick Start
-
-### 1. Clone and Install
+## Setup
 
 ```bash
-git clone https://github.com/your-org/maidcentral-booking-tool.git
+git clone <your-repo-url>
 cd maidcentral-booking-tool
 npm install
+cp .env.example .env.local
 ```
 
-### 2. Configure Credentials
+Edit `.env.local`:
 
-1. Copy the environment template:
-   ```bash
-   cp .env.example .env.local
-   ```
+```env
+API_USERNAME=MC.your_username
+API_KEY=your_api_key
+NEXT_PUBLIC_API_BASE_URL=https://api.maidcentral.com
+```
 
-2. Edit `.env.local` with your partner credentials:
-   ```env
-   NEXT_PUBLIC_API_BASE_URL=https://api.maidcentral.net
-   NEXT_PUBLIC_API_MOCKING_ENABLED=false
+Run it:
 
-   MAIDCENTRAL_EMAIL=your-partner-email@example.com
-   MAIDCENTRAL_PASSWORD=your-secure-password
-   MAIDCENTRAL_PHONE_CODE=
-   ```
+```bash
+npm run dev
+```
 
-### 3. Initial Authentication Setup
+Visit http://localhost:3000.
 
-1. Start the development server:
-   ```bash
-   npm run dev
-   ```
+## How authentication works
 
-2. **Important**: Leave `MAIDCENTRAL_PHONE_CODE` empty initially. The first time you run the app, it will:
-   - Attempt to authenticate with your email/password
-   - Trigger a 6-digit SMS code to be sent to your registered phone
-   - Show an error message indicating the phone code is required
+1. On mount, `AuthenticationProvider` calls the local `GET /api/auth` route.
+2. That route (server-side, so `API_KEY` never reaches the browser) POSTs
+   to MaidCentral's `/token` endpoint with the API credentials.
+3. The returned bearer token is passed to the client and attached as
+   `Authorization: Bearer …` on all subsequent MaidCentral API calls.
 
-3. Check your phone for the SMS code (usually arrives within 30 seconds)
+No SMS / phone code step is required — these are machine credentials.
 
-4. Update `.env.local` with the received code:
-   ```env
-   MAIDCENTRAL_PHONE_CODE=123456
-   ```
+## Deploying
 
-5. Refresh the page - authentication should now succeed!
+Any host that runs Next.js works (Vercel, Netlify, AWS, Railway, a Docker
+container). Set these environment variables on your hosting platform:
 
-## Understanding the Authentication Flow
+| Variable | Required | Notes |
+|---|---|---|
+| `API_USERNAME` | Yes | Server-only. Do not prefix with `NEXT_PUBLIC_`. |
+| `API_KEY` | Yes | Server-only. |
+| `NEXT_PUBLIC_API_BASE_URL` | Yes | Production: `https://api.maidcentral.com` |
+| `NEXT_PUBLIC_CARDCONNECT_ENV` | No | `uat` (default, test cards) or `production` |
+| `NEXT_PUBLIC_MULTI_STEP_LAYOUT` | No | `false` (default, single-page) or `true` (3-step wizard). Override per-request with `?layout=multi-step` / `?layout=single-page` |
+| `NEXT_PUBLIC_PARTNER_ID` | No | Tag outbound requests with a partner ID |
 
-The booking tool uses a secure 2-step authentication process:
-
-### Step 1: Token Request
-- Sends your credentials to `/token` endpoint
-- Returns a 400 error (this is expected!)
-- Triggers SMS code to your registered phone
-
-### Step 2: Login with Code
-- Sends credentials + SMS code to `/api/auth/login`
-- Returns bearer token with 12-hour expiration
-- Token is automatically refreshed as needed
-
-## Development vs Production
-
-### Development Mode
-Set `NEXT_PUBLIC_API_MOCKING_ENABLED=true` to use mock data without authentication. Useful for:
-- Frontend development
-- Testing UI components
-- Demonstrating the booking flow
-
-### Production Mode
-Set `NEXT_PUBLIC_API_MOCKING_ENABLED=false` to use real MaidCentral API with authentication.
-
-## Security Best Practices
-
-### Environment Variables
-- **Never** commit `.env.local` to version control
-- Keep credentials secure and don't share them
-- Use different credentials for different environments
-
-### Server-Side Authentication
-- All authentication happens server-side via Next.js API routes
-- Credentials are never exposed to the browser
-- Tokens are cached securely on the server
-
-## Obtaining MaidCentral Credentials
-
-To get your partner credentials:
-
-1. **Contact MaidCentral Support**
-   - Email: support@maidcentral.com
-   - Phone: [Support Phone Number]
-   - Mention you need "API partner credentials"
-
-2. **Provide Business Information**
-   - Business name and location
-   - Existing MaidCentral account details (if any)
-   - Intended use (website booking integration)
-
-3. **Phone Number Verification**
-   - Ensure the phone number on file can receive SMS
-   - This number will be used for 2FA codes
-
-## Troubleshooting
-
-### "Missing phone code" Error
-**Problem**: App shows "Missing phone code" error
-
-**Solution**: 
-1. Check that `MAIDCENTRAL_PHONE_CODE` is set in `.env.local`
-2. Verify the code is correct (6 digits)
-3. Code expires after 15 minutes - request a new one if needed
-
-### "Authentication failed" Error
-**Problem**: Invalid credentials error
-
-**Solution**:
-1. Verify email/password are correct in `.env.local`
-2. Check if your MaidCentral account is active
-3. Contact support if credentials should be working
-
-### "Network Error" Issues
-**Problem**: Cannot reach MaidCentral API
-
-**Solution**:
-1. Check internet connection
-2. Verify `NEXT_PUBLIC_API_BASE_URL=https://api.maidcentral.net`
-3. Check if MaidCentral API is down (contact support)
-
-### Phone Code Not Received
-**Problem**: SMS code not arriving
-
-**Solution**:
-1. Wait up to 2 minutes (codes can be delayed)
-2. Check spam/blocked messages
-3. Verify phone number on file with MaidCentral support
-4. Try requesting a new code by restarting the app
-
-## Deployment
-
-### Build for Production
+### Build + start
 
 ```bash
 npm run build
 npm start
 ```
 
-### Environment Variables for Production
-
-Set these environment variables on your hosting platform:
-
-```env
-NEXT_PUBLIC_API_BASE_URL=https://api.maidcentral.net
-MAIDCENTRAL_EMAIL=your-partner-email@example.com
-MAIDCENTRAL_PASSWORD=your-secure-password
-MAIDCENTRAL_PHONE_CODE=123456
-```
-
-**Note**: You may need to update the phone code periodically if tokens expire completely.
-
-### Recommended Hosting Platforms
-
-- **Vercel** (recommended for Next.js)
-- **Netlify**
-- **AWS Amplify**
-- **Railway**
-
-## Embedding the Booking Widget
-
-Once deployed, you can embed the booking tool in your website:
+## Embedding on your website
 
 ```html
-<iframe 
-  src="https://your-booking-tool.vercel.app" 
-  width="100%" 
-  height="800"
-  frameborder="0">
+<iframe
+  src="https://your-deployment.example.com"
+  width="100%"
+  height="900"
+  frameborder="0"
+  title="Book your cleaning">
 </iframe>
 ```
 
-## API Rate Limits
+The CSP in `middleware.ts` already allows embedding on any origin via
+`frame-ancestors *`. Restrict this to your specific domain(s) before going to
+production if desired.
 
-- Token requests: 5 per hour per IP
-- Booking submissions: 100 per hour per partner
-- General API calls: 1000 per hour per partner
+## Payment processing
 
-Contact MaidCentral support if you need higher limits.
+The sample ships with a CardConnect integration
+(`app/components/booking/CardConnectTokenizer.tsx`,
+`app/config/cardconnect.ts`). Environment is controlled by
+`NEXT_PUBLIC_CARDCONNECT_ENV`:
+
+- `uat` (default) — talks to `fts-uat.cardconnect.com`. Test card numbers
+  only; no charges are captured. Use this throughout development.
+- `production` — talks to `fts.cardconnect.com`. Real transactions. Only
+  switch after your merchant account is live.
+
+If your MaidCentral account is configured with a different processor, you'll
+need to swap the tokenizer component and update the `frame-src` directive in
+`middleware.ts` and `next.config.js` to whitelist your provider's iframe host.
+
+## Troubleshooting
+
+**App throws `NEXT_PUBLIC_API_BASE_URL is not set` at startup.**
+Add it to `.env.local` and restart the dev server.
+
+**`/token` returns 400.**
+Double-check `API_USERNAME` (starts with `MC.` followed by a hex string) and
+`API_KEY`. Both are sent as a form-urlencoded body — see
+`app/api/auth/route.ts` for the exact request shape.
+
+**Services aren't loading.**
+Open the Network tab in DevTools. You should see a successful `GET /api/auth`
+(local proxy) followed by `GET /api/Lead/ScopeGroups`. If the first fails,
+credentials are the issue. If the second fails, check that
+`NEXT_PUBLIC_API_BASE_URL` points to the right host and that your account has
+active scope groups.
+
+**BookQuote times out.**
+BookQuote captures payment synchronously and can be slow on staging. The
+client already allows 120 seconds. If it's still timing out, the server-side
+payment gateway call is failing — contact MaidCentral support with the lead
+and quote IDs from the Network tab.
 
 ## Support
 
-### Self-Service
-- Check this documentation
-- Review browser console for error details
-- Verify environment variables are set correctly
-
-### Contact Support
-- **MaidCentral API Issues**: support@maidcentral.com
-- **Booking Tool Issues**: Create issue on GitHub repository
-- **Integration Help**: Contact your MaidCentral account manager
-
-## Updates and Maintenance
-
-### Updating the Booking Tool
-
-```bash
-git pull origin main
-npm install
-npm run build
-```
-
-### Monitoring
-
-The booking tool includes built-in logging. Check your hosting platform's logs for:
-- Authentication failures
-- API errors
-- Performance issues
-
-### Token Refresh
-
-Tokens automatically refresh every 11 hours. If you see authentication errors:
-1. Check your hosting platform is still running
-2. Verify credentials haven't changed
-3. Check if phone code needs updating
-
----
-
-## Quick Reference
-
-| Environment Variable | Purpose | Required |
-|---------------------|---------|----------|
-| `NEXT_PUBLIC_API_BASE_URL` | MaidCentral API endpoint | Yes |
-| `NEXT_PUBLIC_API_MOCKING_ENABLED` | Use mock data | No |
-| `MAIDCENTRAL_EMAIL` | Partner email | Yes |
-| `MAIDCENTRAL_PASSWORD` | Partner password | Yes |
-| `MAIDCENTRAL_PHONE_CODE` | SMS verification code | Yes |
-| `PARTNER_ID` | Partner identifier | No |
-
-**Need Help?** Contact support@maidcentral.com or create a GitHub issue.
+- MaidCentral API: `support@maidcentral.com`
+- This booking tool: file a GitHub issue on the repo

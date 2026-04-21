@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError, CancelTokenSource } from 'axios';
+import { API_BASE_URL } from '@/app/lib/config/api-url';
 
 export interface HttpClientConfig extends AxiosRequestConfig {
   retryAttempts?: number;
@@ -14,7 +15,7 @@ export class HttpClient {
 
   constructor(config?: HttpClientConfig) {
     const defaultConfig: HttpClientConfig = {
-      baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.maidcentral.net',
+      baseURL: API_BASE_URL,
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json',

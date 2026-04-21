@@ -1,76 +1,59 @@
 "use client"
 
-import React, { createContext, useContext, useMemo } from 'react';
-import { isMultiStepLayout, isSinglePageLayout, getLayoutMode } from '@/app/lib/config/env';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { isMultiStepLayout } from '@/app/lib/config/env';
 
-/**
- * BookingLayoutContext
- * Provides layout mode information throughout the booking flow
- */
+export type BookingLayoutMode = 'multi-step' | 'single-page';
+
 interface BookingLayoutContextType {
-  /**
-   * Current layout mode
-   */
-  layoutMode: 'multi-step' | 'single-page';
-  
-  /**
-   * Check if multi-step layout is active
-   */
+  layoutMode: BookingLayoutMode;
   isMultiStep: boolean;
-  
-  /**
-   * Check if single-page layout is active
-   */
   isSinglePage: boolean;
 }
 
 const BookingLayoutContext = createContext<BookingLayoutContextType | undefined>(undefined);
 
 /**
- * BookingLayoutProvider
- * Provides layout configuration to child components
+ * Reads the layout override from `?layout=multi-step` / `?layout=single-page` on
+ * the URL. Returns null if the param is absent or invalid. Lets partners A/B
+ * test both layouts from the same deployment without cutting a new build.
  */
+function readLayoutFromUrl(): BookingLayoutMode | null {
+  if (typeof window === 'undefined') return null;
+  const param = new URLSearchParams(window.location.search).get('layout');
+  if (param === 'multi-step' || param === 'single-page') return param;
+  return null;
+}
+
 export function BookingLayoutProvider({ children }: { children: React.ReactNode }) {
-  // Read environment configuration once at provider level
-  // This ensures consistent behavior throughout the component tree
-  const contextValue = useMemo<BookingLayoutContextType>(() => ({
-    layoutMode: getLayoutMode(),
-    isMultiStep: isMultiStepLayout(),
-    isSinglePage: isSinglePageLayout(),
-  }), []); // Empty deps array - environment variables don't change at runtime
+  // Initial render (SSR + first client paint) uses the env-var default so both
+  // sides match. Then useEffect swaps in the URL override on the client only.
+  const envDefault: BookingLayoutMode = isMultiStepLayout() ? 'multi-step' : 'single-page';
+  const [layoutMode, setLayoutMode] = useState<BookingLayoutMode>(envDefault);
+
+  useEffect(() => {
+    const fromUrl = readLayoutFromUrl();
+    if (fromUrl && fromUrl !== layoutMode) setLayoutMode(fromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const value: BookingLayoutContextType = {
+    layoutMode,
+    isMultiStep: layoutMode === 'multi-step',
+    isSinglePage: layoutMode === 'single-page',
+  };
 
   return (
-    <BookingLayoutContext.Provider value={contextValue}>
+    <BookingLayoutContext.Provider value={value}>
       {children}
     </BookingLayoutContext.Provider>
   );
 }
 
-/**
- * useBookingLayout Hook
- * Access booking layout configuration from any component
- */
-export function useBookingLayout() {
+export function useBookingLayout(): BookingLayoutContextType {
   const context = useContext(BookingLayoutContext);
-  
   if (context === undefined) {
     throw new Error('useBookingLayout must be used within a BookingLayoutProvider');
   }
-  
   return context;
-}
-
-/**
- * Helper component for conditional rendering based on layout mode
- * Usage: <LayoutConditional multiStep={<MultiStepComponent />} singlePage={<SinglePageComponent />} />
- */
-export function LayoutConditional({ 
-  multiStep, 
-  singlePage 
-}: { 
-  multiStep: React.ReactNode; 
-  singlePage: React.ReactNode;
-}) {
-  const { isMultiStep } = useBookingLayout();
-  return <>{isMultiStep ? multiStep : singlePage}</>;
 }
