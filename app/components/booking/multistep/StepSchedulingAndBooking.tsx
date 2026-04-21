@@ -27,11 +27,11 @@ import { leadService } from "@/app/services/api/lead"
 import type {
   QuoteCreateRequest,
   QuoteQuestion,
-  QuoteRateModification,
   QuoteScopeOfWork,
 } from "@/app/types/api/lead"
 import { QuestionsForm } from "@/app/components/booking/pickers/QuestionsForm"
 import { filterQuestionsForStep } from "./questionStep"
+import { utmToApiFields } from "@/app/lib/utm"
 import type {
   BookQuoteRequest,
   ScopeOfWork as BookQuoteScopeOfWork,
@@ -39,11 +39,14 @@ import type {
 } from "@/app/types/api/bookquote"
 import { CardConnectTokenizer } from "@/app/components/booking/CardConnectTokenizer"
 import { BookingSuccessModal } from "@/app/components/booking/BookingSuccessModal"
+import { ApiErrorBanner } from "@/app/components/booking/ApiErrorBanner"
+import { clearPersistedBooking } from "@/app/lib/booking-storage"
+import { track } from "@/app/lib/tracker"
 
 interface StepSchedulingAndBookingProps {
-  selectedFrequency: Frequency | null
+  frequencyByScope: Record<number, Frequency>
   selectedRateModifications: RateModification[]
-  selectedModifications: Record<number, number>
+  modsByScope: Record<number, Record<number, number>>
   selectedDate: string | null
   onDateChange: (date: string | null) => void
   selectedTime: string
@@ -70,10 +73,29 @@ function generateTimeSlots() {
 
 const TIME_SLOTS = generateTimeSlots()
 
+// MaidCentral's built-in form auto-applies these to the first scope of every
+// new booking — TagId 11 ("First Time") and 13 ("In & Out Of Rotation"). The
+// Lead API no longer applies them automatically, so the Partner must pass
+// them explicitly (docs gap §11). If future tenants need custom defaults,
+// swap this for a picker on Step 3.
+const DEFAULT_FIRST_JOB_TAGS = [11, 13]
+
+// MaidCentral's `tblBillingTerms` default row. 2 = credit card — matches the
+// only payment path we support (CardConnect tokenized card). Pull into a
+// picker if we ever expose ACH or alternate billing terms.
+const DEFAULT_BILLING_TERMS_ID = 2
+
+// Discount-code UI is off by default because the public Lead API has no
+// validation endpoint for promo codes yet (docs gap §2). Partners can flip
+// this on to surface the input as a stub; it currently rejects every code so
+// the visitor sees the field but nothing actually applies. When the API gets
+// POST /api/Lead/ApplyDiscountCode, swap the stub for the real call.
+const DISCOUNT_CODES_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DISCOUNT_CODES === "true"
+
 export function StepSchedulingAndBooking({
-  selectedFrequency,
+  frequencyByScope,
   selectedRateModifications,
-  selectedModifications,
+  modsByScope,
   selectedDate,
   onDateChange,
   selectedTime,
@@ -102,8 +124,26 @@ export function StepSchedulingAndBooking({
   const [submissionError, setSubmissionError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [discountCodeInput, setDiscountCodeInput] = useState("")
+  const [discountCodeError, setDiscountCodeError] = useState("")
+  const [discountCodeChecking, setDiscountCodeChecking] = useState(false)
+  // Bumped to force React to unmount + remount the CardConnect iframe after a
+  // booking failure. The iframe's internal CVV state can wedge across retries;
+  // remounting guarantees a clean slate.
+  const [cardFormResetKey, setCardFormResetKey] = useState(0)
+
+  const resetPaymentForm = () => {
+    setPaymentToken(null)
+    setPaymentExpiry(null)
+    setPaymentError(null)
+    setCardFormResetKey(k => k + 1)
+  }
 
   const scopeGroupId = formData.selectedScopeGroup?.ScopeGroupId
+  // Hours come from the latest CalculatePrice response; the Availability endpoint
+  // uses them to size per-day capacity. Fall back to 2 only if pricing never ran —
+  // matches the old constant so we don't worsen an already-degraded state.
+  const availabilityHours = formData.pricing.totalHours || 2
 
   useEffect(() => {
     if (!token || !scopeGroupId) return
@@ -120,7 +160,7 @@ export function StepSchedulingAndBooking({
       .getAvailability(
         token,
         scopeGroupId,
-        2,
+        availabilityHours,
         start.toISOString().split("T")[0],
         end.toISOString().split("T")[0]
       )
@@ -147,21 +187,46 @@ export function StepSchedulingAndBooking({
     }
     // selectedDate / onDateChange intentionally excluded — they're only consulted
     // inside the resolver and including them would refetch on every date change.
+    // availabilityHours IS included so the calendar updates if the visitor goes
+    // back and changes frequency/rate mods, which changes the per-day hour load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, scopeGroupId])
+  }, [token, scopeGroupId, availabilityHours])
+
+  const selectedScopes = formData.selectedScopes
+  const everyScopeHasFrequency =
+    selectedScopes.length > 0 && selectedScopes.every(s => !!frequencyByScope[s.ScopeId])
 
   const canBook =
     !!token &&
     !!formData.leadId &&
     !!formData.quoteId &&
-    !!formData.selectedScope &&
     !!formData.selectedScopeGroup &&
-    !!selectedFrequency &&
+    everyScopeHasFrequency &&
     !!selectedDate &&
     !!selectedTime &&
     !!paymentToken &&
     !!paymentExpiry &&
     allRequiredAfterPricingAnswered
+
+  // Build a per-scope rate-mods list for one scope. Typed with required
+  // IsRecurring so it satisfies both QuoteRateModification (where IsRecurring
+  // is optional) and BookQuoteRateMod (where it's required).
+  type BuiltRateMod = { RateModificationId: number; Quantity: number; IsRecurring: boolean }
+  const buildRateModsForScope = (scopeId: number): BuiltRateMod[] => {
+    const frequency = frequencyByScope[scopeId]
+    const isFrequencyRecurring = frequency?.FrequencyId !== undefined && frequency.FrequencyId !== "S"
+    return Object.entries(modsByScope[scopeId] ?? {})
+      .filter(([, quantity]) => quantity > 0)
+      .map(([modId, quantity]) => {
+        const id = parseInt(modId)
+        const rateMod = selectedRateModifications.find(r => r.RateModificationId === id)
+        return {
+          RateModificationId: id,
+          Quantity: quantity,
+          IsRecurring: isFrequencyRecurring && rateMod?.IsRecurring === true,
+        }
+      })
+  }
 
   const handleBookNow = async () => {
     setSubmissionError("")
@@ -170,9 +235,8 @@ export function StepSchedulingAndBooking({
       !token ||
       !formData.leadId ||
       !formData.quoteId ||
-      !formData.selectedScope ||
       !formData.selectedScopeGroup ||
-      !selectedFrequency ||
+      selectedScopes.length === 0 ||
       !selectedDate ||
       !paymentToken ||
       !paymentExpiry
@@ -186,23 +250,18 @@ export function StepSchedulingAndBooking({
       const address1 = formData.customer?.address?.street ?? ""
       const city = formData.customer?.address?.city ?? ""
       const region = formData.customer?.address?.state ?? ""
+      // Step 2 persists the billing-address choice. When the visitor ticked
+      // "Billing address same as service address" we mirror the service fields;
+      // otherwise use the separate billing values they entered.
+      const billing = formData.payment?.billingAddress
+      const billingSame = billing?.sameAsService ?? true
+      const billingAddress1 = billingSame ? address1 : billing?.street ?? address1
+      const billingCity = billingSame ? city : billing?.city ?? city
+      const billingRegion = billingSame ? region : billing?.state ?? region
+      const billingPostal = billingSame ? postalCode : billing?.zipCode ?? postalCode
 
       // Persist any "After Pricing" question answers onto the quote before booking.
-      // The quote was initially saved at the end of Step 2 (before these were answered).
       if (afterPricingQuestions.length > 0) {
-        const quoteRateMods: QuoteRateModification[] = Object.entries(selectedModifications)
-          .filter(([, quantity]) => quantity > 0)
-          .map(([modId, quantity]) => {
-            const id = parseInt(modId)
-            const rateMod = selectedRateModifications.find(r => r.RateModificationId === id)
-            const isFrequencyRecurring = selectedFrequency.FrequencyId !== "S"
-            return {
-              RateModificationId: id,
-              Quantity: quantity,
-              IsRecurring: isFrequencyRecurring && rateMod?.IsRecurring === true,
-            }
-          })
-
         const quoteQuestions: QuoteQuestion[] = Object.entries(questionAnswers)
           .filter(([, answer]) => answer && answer.trim() !== "")
           .map(([questionId, answer]) => ({
@@ -210,13 +269,11 @@ export function StepSchedulingAndBooking({
             Answer: answer,
           }))
 
-        const quoteScopesOfWork: QuoteScopeOfWork[] = [
-          {
-            ScopeOfWorkId: formData.selectedScope.ScopeId,
-            FrequencyId: selectedFrequency.FrequencyId,
-            RateModifications: quoteRateMods,
-          },
-        ]
+        const quoteScopesOfWork: QuoteScopeOfWork[] = selectedScopes.map(scope => ({
+          ScopeOfWorkId: scope.ScopeId,
+          FrequencyId: frequencyByScope[scope.ScopeId]?.FrequencyId ?? "",
+          RateModifications: buildRateModsForScope(scope.ScopeId),
+        }))
 
         const quoteUpdate: QuoteCreateRequest = {
           LeadId: formData.leadId,
@@ -225,16 +282,19 @@ export function StepSchedulingAndBooking({
           HomeCity: city,
           HomeRegion: region,
           HomePostalCode: postalCode,
-          BillingAddress1: address1,
-          BillingCity: city,
-          BillingRegion: region,
-          BillingPostalCode: postalCode,
+          BillingAddress1: billingAddress1,
+          BillingCity: billingCity,
+          BillingRegion: billingRegion,
+          BillingPostalCode: billingPostal,
+          // Suppress the duplicate quote email — the customer got one on the
+          // Step 2 save; this update is just persisting after-pricing answers.
           SendQuoteEmail: false,
           AddToCampaigns: true,
           TriggerWebhook: true,
           ScopeGroupId: formData.selectedScopeGroup.ScopeGroupId,
           ScopesOfWork: quoteScopesOfWork,
           Questions: quoteQuestions,
+          ...utmToApiFields(formData.utm),
         }
 
         const quoteResponse = await leadService.createOrUpdateQuote(token, quoteUpdate)
@@ -251,62 +311,98 @@ export function StepSchedulingAndBooking({
       jobDate.setHours(parseInt(hours), parseInt(minutes), 0, 0)
       const firstJobDate = jobDate.toISOString().replace("T", " ").substring(0, 16)
 
-      const bookingRateMods: BookQuoteRateMod[] = Object.entries(selectedModifications)
-        .filter(([, quantity]) => quantity > 0)
-        .map(([modId, quantity]) => {
-          const id = parseInt(modId)
-          const rateMod = selectedRateModifications.find(r => r.RateModificationId === id)
-          const isFrequencyRecurring = selectedFrequency.FrequencyId !== "S"
-          return {
-            RateModificationId: id,
-            Quantity: quantity,
-            IsRecurring: isFrequencyRecurring && rateMod?.IsRecurring === true,
-          }
-        })
-
-      const scopesOfWork: BookQuoteScopeOfWork[] = [
-        {
-          ScopeOfWorkId: formData.selectedScope.ScopeId,
-          FrequencyId: selectedFrequency.FrequencyId,
+      // Every scope books on the same calendar day for now. Spec 02-flow-mapping
+      // §Book notes that multi-frequency scopes may need staggered start dates
+      // (`firstJobDate + GetDaysBetweenByServiceTypeId(frequency)`); defer that
+      // refinement until we have a concrete tenant using it.
+      //
+      // First-job tags: apply MaidCentral's built-in defaults [11, 13] ("First
+      // Time" + "In & Out Of Rotation") to the first scope only. The public
+      // Lead API no longer auto-applies these (docs gap §11); without them,
+      // tenants who expect those tags on every new booking don't get them.
+      const scopesOfWork: BookQuoteScopeOfWork[] = selectedScopes.map((scope, index) => {
+        const rateMods: BookQuoteRateMod[] = buildRateModsForScope(scope.ScopeId)
+        return {
+          ScopeOfWorkId: scope.ScopeId,
+          FrequencyId: frequencyByScope[scope.ScopeId]?.FrequencyId ?? "",
           FirstJobDate: firstJobDate,
-          // Pre-adjustment CalculatedBaseCost. The server re-applies RateModifications,
-          // so passing AdjustedBaseCost here would double-count.
-          BaseFee: formData.pricing.baseFee || 0,
-          RateModifications: bookingRateMods.length > 0 ? bookingRateMods : undefined,
-        },
-      ]
+          BaseFee: formData.pricing.perScope[scope.ScopeId]?.baseFee ?? 0,
+          RateModifications: rateMods.length > 0 ? rateMods : undefined,
+          FirstJobTags: index === 0 ? DEFAULT_FIRST_JOB_TAGS : undefined,
+        }
+      })
 
       const bookingRequest: BookQuoteRequest = {
-        SendBookedEmail: false,
+        SendBookedEmail: true,
+        // Customer portal flow is out of scope for the Partner rebuild — leave off.
         SendCustomerPortalInvite: false,
-        TriggerWebhook: false,
+        TriggerWebhook: true,
         LeadId: formData.leadId,
         QuoteId: formData.quoteId,
         Expiry: paymentExpiry,
         Token: paymentToken,
+        BillingTermsId: DEFAULT_BILLING_TERMS_ID,
         ScopeGroupId: formData.selectedScopeGroup.ScopeGroupId,
         ScopesOfWork: scopesOfWork,
         HomeAddress1: address1,
         HomeCity: city,
         HomeRegion: region,
         HomePostalCode: postalCode,
-        CustomerBillingAddress1: address1,
-        CustomerBillingCity: city,
-        CustomerBillingRegion: region,
-        CustomerBillingPostalCode: postalCode,
+        CustomerBillingAddress1: billingAddress1,
+        CustomerBillingCity: billingCity,
+        CustomerBillingRegion: billingRegion,
+        CustomerBillingPostalCode: billingPostal,
+        ...utmToApiFields(formData.utm),
       }
 
       const response = await bookQuoteService.bookQuote(token, bookingRequest)
       if (!response.success) {
         setSubmissionError(response.error || "Booking failed")
+        track({ type: "booking_error", step: 2, message: response.error || "Booking failed" })
+        // Remount the CardConnect iframe — the token can be rejected by the
+        // processor and trying again without a fresh iframe usually fails the
+        // same way.
+        resetPaymentForm()
         return
       }
 
+      // Booking confirmed — drop the in-flight localStorage payload so that a
+      // reload or new visit starts from a clean slate instead of rehydrating
+      // a completed quote.
+      clearPersistedBooking()
+      track({
+        type: "booking_completed",
+        quoteId: formData.quoteId,
+        leadId: formData.leadId,
+      })
       setShowSuccessModal(true)
     } catch (err: any) {
-      setSubmissionError(err?.message || "Something went wrong. Please try again.")
+      const message = err?.message || "Something went wrong. Please try again."
+      setSubmissionError(message)
+      track({ type: "booking_error", step: 2, message })
+      resetPaymentForm()
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const handleApplyDiscountCode = async () => {
+    setDiscountCodeError("")
+    const code = discountCodeInput.trim()
+    if (!code) {
+      setDiscountCodeError("Please enter a code")
+      return
+    }
+    setDiscountCodeChecking(true)
+    try {
+      // Stub: the public Lead API has no discount-code validation endpoint
+      // (docs gap §2). Until POST /api/Lead/ApplyDiscountCode exists we reject
+      // every code. The input is hidden by default (DISCOUNT_CODES_ENABLED)
+      // so visitors don't see a teaser they can't use.
+      await new Promise(r => setTimeout(r, 300))
+      setDiscountCodeError("That code isn't valid.")
+    } finally {
+      setDiscountCodeChecking(false)
     }
   }
 
@@ -429,9 +525,42 @@ export function StepSchedulingAndBooking({
         />
       )}
 
+      {DISCOUNT_CODES_ENABLED && selectedDate && selectedTime && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Promo code</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={discountCodeInput}
+                onChange={e => {
+                  setDiscountCodeInput(e.target.value)
+                  if (discountCodeError) setDiscountCodeError("")
+                }}
+                placeholder="e.g. SPRING25"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
+                aria-invalid={!!discountCodeError}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleApplyDiscountCode}
+                disabled={discountCodeChecking}
+              >
+                {discountCodeChecking ? "Checking…" : "Apply"}
+              </Button>
+            </div>
+            {discountCodeError && <p className="text-sm text-red-600">{discountCodeError}</p>}
+          </CardContent>
+        </Card>
+      )}
+
       {selectedDate && selectedTime && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
           <CardConnectTokenizer
+            key={cardFormResetKey}
             onTokenReceived={(tok, expiry) => {
               setPaymentToken(tok)
               setPaymentExpiry(expiry)
@@ -463,11 +592,7 @@ export function StepSchedulingAndBooking({
         </motion.div>
       )}
 
-      {submissionError && (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
-          {submissionError}
-        </div>
-      )}
+      <ApiErrorBanner message={submissionError} />
 
       <div className="flex justify-between pt-2">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting}>

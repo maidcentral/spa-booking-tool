@@ -140,6 +140,31 @@ export const PricingSummary = memo(function PricingSummary({
             </div>
           )}
 
+          {/* First-job vs. recurring split — shown when they differ (e.g. a
+              recurring booking with a one-time initial deep clean) to match
+              the MaidCentral built-in summary. Falls through to a single
+              Total row for one-time services where the two are equal. */}
+          {!isPricingLoading &&
+            pricing.lineItems.length > 0 &&
+            pricing.recurringTotal > 0 &&
+            pricing.firstJobTotal > 0 &&
+            pricing.firstJobTotal !== pricing.recurringTotal && (
+              <div className="space-y-2 pt-4 border-t border-[var(--text-color)]/50">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-800">First visit</span>
+                  <span className="font-medium text-gray-900">
+                    {formatCurrency(pricing.firstJobTotal)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-800">Each recurring visit</span>
+                  <span className="font-medium text-gray-900">
+                    {formatCurrency(pricing.recurringTotal)}
+                  </span>
+                </div>
+              </div>
+            )}
+
           {/* Total */}
           <div className="pt-4 border-t border-[var(--text-color)]/50">
             <div className="flex justify-between items-center">

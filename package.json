@@ -42,6 +42,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.23.12",
+    "isomorphic-dompurify": "^3.9.0",
     "lucide-react": "^0.540.0",
     "next": "15.5.0",
     "react": "19.1.0",

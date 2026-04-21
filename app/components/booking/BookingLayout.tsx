@@ -4,6 +4,7 @@ import React from "react"
 import { motion } from "framer-motion"
 import { cn } from "@/app/lib/utils"
 import { PricingSummary } from "./PricingSummary"
+import { SafeHtml } from "./SafeHtml"
 import { BookingPricing } from "@/app/types/booking"
 
 interface BookingLayoutProps {
@@ -16,6 +17,9 @@ interface BookingLayoutProps {
   onCheckout?: () => void
   className?: string
   isPricingLoading?: boolean
+  /** Scope-group-level marketing copy from ScopeGroupDto.MarketingText.
+   *  Rendered above the pricing summary when present. Plain text for now. */
+  marketingText?: string | null
 }
 
 export function BookingLayout({
@@ -27,7 +31,8 @@ export function BookingLayout({
   zipCode,
   onCheckout,
   className,
-  isPricingLoading
+  isPricingLoading,
+  marketingText,
 }: BookingLayoutProps) {
   return (
     <div className={cn("min-h-screen bg-gray-50", className)}>
@@ -62,8 +67,14 @@ export function BookingLayout({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.5, delay: 0.2 }}
-              className="sticky top-8 z-10"
+              className="sticky top-8 z-10 space-y-4"
             >
+              {marketingText && marketingText.trim() !== "" && (
+                <SafeHtml
+                  html={marketingText}
+                  className="p-4 rounded-lg border border-blue-100 bg-blue-50/60 text-sm text-blue-900 marketing-text"
+                />
+              )}
               <PricingSummary
                 pricing={pricing}
                 selectedService={selectedService}

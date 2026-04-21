@@ -157,6 +157,10 @@ export interface RateModification {
   CostDisplay: string;
   CostCalcType: number;
   CostCalcDescription: string;
+  // Present on non-recurring rate mods that bill against a specific frequency
+  // (e.g. "applies once per quarter"). Forwarded on CalculatePrice / quote
+  // create / book when set. Not always returned — hence optional.
+  RateModificationFrequencyId?: number;
   // Fields returned from CalculatePrice responses (not the RateModifications list).
   Quantity?: number;
   IsRecurring?: boolean;

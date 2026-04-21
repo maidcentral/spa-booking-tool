@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { BookingProvider, useBooking } from "@/app/contexts/BookingContext"
 import { useAuth } from "@/app/components/booking/AuthenticationProvider"
@@ -15,19 +15,22 @@ import type {
   RateModification,
 } from "@/app/services/api/booking-data"
 import { formatCurrency } from "@/app/lib/utils"
+import { parseUtmFromSearch } from "@/app/lib/utm"
+import { loadPersistedBooking, savePersistedBooking } from "@/app/lib/booking-storage"
+import { track } from "@/app/lib/tracker"
 
 const STEPS = [
   {
     id: "contact",
     title: "About you",
-    description: "Contact details",
+    description: "Contact & service",
     isCompleted: false,
     isActive: true,
   },
   {
     id: "home-pricing",
     title: "Home & pricing",
-    description: "Service and quote",
+    description: "Customize & address",
     isCompleted: false,
     isActive: false,
   },
@@ -42,14 +45,14 @@ const STEPS = [
 
 function MultiStepBookingFlowInner() {
   const { isAuthenticated } = useAuth()
-  const { formData, isPricingLoading } = useBooking()
+  const { formData, isPricingLoading, updateFormData } = useBooking()
   const [currentStep, setCurrentStep] = useState(0)
 
   // Cross-step state lifted from individual steps so the sidebar, the sticky
   // mobile bar, and the QuestionStepType routing can all see up-to-date values
-  // regardless of which step is active.
-  const [selectedFrequency, setSelectedFrequency] = useState<Frequency | null>(null)
-  const [selectedModifications, setSelectedModifications] = useState<Record<number, number>>({})
+  // regardless of which step is active. Multi-scope: per-scope records.
+  const [frequencyByScope, setFrequencyByScope] = useState<Record<number, Frequency>>({})
+  const [modsByScope, setModsByScope] = useState<Record<number, Record<number, number>>>({})
   const [selectedRateModifications, setSelectedRateModifications] = useState<RateModification[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [selectedTime, setSelectedTime] = useState<string>("")
@@ -57,16 +60,132 @@ function MultiStepBookingFlowInner() {
   const [questionsUnavailable, setQuestionsUnavailable] = useState(false)
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({})
 
+  // Flips true after the mount-time localStorage hydrate runs. Until it does,
+  // we don't render the step components — otherwise the children would copy
+  // the empty initial formData into local `useState` initializers and miss
+  // the rehydrated values. Also guards the save effect from overwriting a
+  // persisted payload with the blank initial state.
+  const [hydrated, setHydrated] = useState(false)
+  // Wall-clock timestamp when the current step was entered — subtracted on the
+  // next step transition to emit a durationMs on booking_step_completed.
+  const stepStartRef = useRef<number>(0)
+  // Flips true after the first post-hydration render so the scroll-on-step-
+  // change effect doesn't snap the page on the initial mount (when currentStep
+  // is either 0 by default or rehydrated from localStorage).
+  const firstStepRenderRef = useRef(true)
+
+  // Scroll to top whenever the visitor moves between steps. Each step starts
+  // with its own heading, so the visitor should see it — they just clicked
+  // Continue/Back at the bottom of the previous step. Honour the visitor's
+  // prefers-reduced-motion setting: fall back to instant scroll when the OS
+  // asks us to avoid non-essential animation.
+  useEffect(() => {
+    if (firstStepRenderRef.current) {
+      firstStepRenderRef.current = false
+      return
+    }
+    if (typeof window === "undefined") return
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" })
+  }, [currentStep])
+
+  const advanceStep = (next: number) => {
+    const now = Date.now()
+    const durationMs = stepStartRef.current ? now - stepStartRef.current : 0
+    track({ type: "booking_step_completed", step: currentStep, durationMs })
+    stepStartRef.current = now
+    setCurrentStep(next)
+  }
+
+  // Mount: rehydrate from localStorage (if anything saved within the last 7d)
+  // and capture utm_* from the URL. UTM overrides the persisted value so a
+  // fresh campaign click doesn't stick to a stale attribution.
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setHydrated(true)
+      return
+    }
+
+    const persisted = loadPersistedBooking()
+    if (persisted) {
+      updateFormData(persisted.formData)
+      setFrequencyByScope(persisted.frequencyByScope ?? {})
+      setModsByScope(persisted.modsByScope ?? {})
+      setQuestionAnswers(persisted.questionAnswers ?? {})
+      setCurrentStep(persisted.currentStep ?? 0)
+      setSelectedDate(persisted.selectedDate ?? null)
+      setSelectedTime(persisted.selectedTime ?? "")
+    }
+
+    const utm = parseUtmFromSearch(window.location.search)
+    if (Object.keys(utm).length > 0) {
+      updateFormData({ utm })
+    }
+
+    stepStartRef.current = Date.now()
+    track({ type: "booking_started" })
+    // Setting hydrated last so every other state update from this effect is
+    // batched with it; children mount in a single render with all values.
+    setHydrated(true)
+    // Intentionally fire once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Debounced save. Only runs after hydration so an empty initial state can't
+  // clobber a prior persisted payload.
+  useEffect(() => {
+    if (!hydrated) return
+    const handle = setTimeout(() => {
+      savePersistedBooking({
+        formData: {
+          selectedScopeGroup: formData.selectedScopeGroup,
+          selectedScope: formData.selectedScope,
+          selectedScopes: formData.selectedScopes,
+          selectedFrequency: formData.selectedFrequency,
+          zipCode: formData.zipCode,
+          validatedPostalCode: formData.validatedPostalCode,
+          customer: formData.customer,
+          payment: formData.payment,
+          customerSourceId: formData.customerSourceId,
+          utm: formData.utm,
+          smsConsentTransactional: formData.smsConsentTransactional,
+          smsConsentMarketing: formData.smsConsentMarketing,
+          leadId: formData.leadId,
+          quoteId: formData.quoteId,
+          scopeGroupId: formData.scopeGroupId,
+        },
+        frequencyByScope,
+        modsByScope,
+        questionAnswers,
+        currentStep,
+        selectedDate,
+        selectedTime,
+      })
+    }, 500)
+    return () => clearTimeout(handle)
+  }, [
+    hydrated,
+    formData,
+    frequencyByScope,
+    modsByScope,
+    questionAnswers,
+    currentStep,
+    selectedDate,
+    selectedTime,
+  ])
+
   const steps = STEPS.map((step, index) => ({
     ...step,
     isCompleted: index < currentStep,
     isActive: index === currentStep,
   }))
 
-  if (!isAuthenticated) return null
+  if (!isAuthenticated || !hydrated) return null
 
   const goToStep = (index: number) => {
-    if (index <= currentStep) setCurrentStep(index)
+    if (index <= currentStep) advanceStep(index)
   }
 
   const zipCode = formData.validatedPostalCode?.PostalCode ?? formData.zipCode
@@ -81,6 +200,7 @@ function MultiStepBookingFlowInner() {
       selectedTime={selectedTime}
       zipCode={zipCode}
       isPricingLoading={isPricingLoading}
+      marketingText={formData.selectedScopeGroup?.MarketingText ?? undefined}
     >
       <ProgressIndicator
         steps={steps}
@@ -101,30 +221,36 @@ function MultiStepBookingFlowInner() {
           className="pb-24 lg:pb-0"
         >
           {currentStep === 0 && (
-            <StepContact onCompleted={() => setCurrentStep(1)} />
-          )}
-          {currentStep === 1 && (
-            <StepHomeAndPricing
-              selectedFrequency={selectedFrequency}
-              onFrequencyChange={setSelectedFrequency}
-              selectedModifications={selectedModifications}
-              onModificationsChange={setSelectedModifications}
-              onRateModificationsLoaded={setSelectedRateModifications}
+            <StepContact
               questions={questions}
               onQuestionsLoaded={setQuestions}
               questionsUnavailable={questionsUnavailable}
               onQuestionsUnavailableChange={setQuestionsUnavailable}
               questionAnswers={questionAnswers}
               onQuestionAnswersChange={setQuestionAnswers}
-              onCompleted={() => setCurrentStep(2)}
-              onBack={() => setCurrentStep(0)}
+              onCompleted={() => advanceStep(1)}
+            />
+          )}
+          {currentStep === 1 && (
+            <StepHomeAndPricing
+              frequencyByScope={frequencyByScope}
+              onFrequencyByScopeChange={setFrequencyByScope}
+              modsByScope={modsByScope}
+              onModsByScopeChange={setModsByScope}
+              onRateModificationsLoaded={setSelectedRateModifications}
+              questions={questions}
+              questionsUnavailable={questionsUnavailable}
+              questionAnswers={questionAnswers}
+              onQuestionAnswersChange={setQuestionAnswers}
+              onCompleted={() => advanceStep(2)}
+              onBack={() => advanceStep(0)}
             />
           )}
           {currentStep === 2 && (
             <StepSchedulingAndBooking
-              selectedFrequency={selectedFrequency ?? formData.selectedFrequency ?? null}
+              frequencyByScope={frequencyByScope}
               selectedRateModifications={selectedRateModifications}
-              selectedModifications={selectedModifications}
+              modsByScope={modsByScope}
               selectedDate={selectedDate}
               onDateChange={setSelectedDate}
               selectedTime={selectedTime}
@@ -134,7 +260,7 @@ function MultiStepBookingFlowInner() {
               onQuestionAnswerChange={(id, answer) =>
                 setQuestionAnswers(prev => ({ ...prev, [id]: answer }))
               }
-              onBack={() => setCurrentStep(1)}
+              onBack={() => advanceStep(1)}
             />
           )}
         </motion.div>

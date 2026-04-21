@@ -11,6 +11,14 @@ interface CardConnectTokenizerProps {
   disabled?: boolean
 }
 
+/**
+ * Stale-iframe recovery pattern: the CardConnect iframe holds cached CVV state
+ * that can wedge tokenization after a validation-failure retry. When a booking
+ * attempt fails, the parent should bump a numeric key on this component — React
+ * will unmount the iframe and mount a fresh one. Mirrors the internal fix in
+ * commit bffa5bca2 (see docs/online-booking-form/04-react-build-spec.md §8).
+ */
+
 export function CardConnectTokenizer({
   onTokenReceived,
   onError,

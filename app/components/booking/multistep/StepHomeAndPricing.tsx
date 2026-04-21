@@ -23,26 +23,29 @@ import type {
   QuoteRateModification,
   QuoteScopeOfWork,
 } from "@/app/types/api/lead"
-import { ServiceSelection } from "@/app/components/booking/steps/ServiceSelection"
 import { FrequencyPicker } from "@/app/components/booking/pickers/FrequencyPicker"
 import { RateModsPicker } from "@/app/components/booking/pickers/RateModsPicker"
 import { QuestionsForm } from "@/app/components/booking/pickers/QuestionsForm"
+import { ApiErrorBanner } from "@/app/components/booking/ApiErrorBanner"
 import { filterQuestionsForStep } from "./questionStep"
+import { utmToApiFields } from "@/app/lib/utm"
 
 interface StepHomeAndPricingProps {
-  selectedFrequency: Frequency | null
-  onFrequencyChange: (frequency: Frequency | null) => void
-  selectedModifications: Record<number, number>
-  onModificationsChange: (
+  frequencyByScope: Record<number, Frequency>
+  onFrequencyByScopeChange: (
     value:
-      | Record<number, number>
-      | ((prev: Record<number, number>) => Record<number, number>)
+      | Record<number, Frequency>
+      | ((prev: Record<number, Frequency>) => Record<number, Frequency>)
+  ) => void
+  modsByScope: Record<number, Record<number, number>>
+  onModsByScopeChange: (
+    value:
+      | Record<number, Record<number, number>>
+      | ((prev: Record<number, Record<number, number>>) => Record<number, Record<number, number>>)
   ) => void
   onRateModificationsLoaded: (rateModifications: RateModification[]) => void
   questions: QuestionData[]
-  onQuestionsLoaded: (questions: QuestionData[]) => void
   questionsUnavailable: boolean
-  onQuestionsUnavailableChange: (unavailable: boolean) => void
   questionAnswers: Record<number, string>
   onQuestionAnswersChange: (
     value:
@@ -60,16 +63,24 @@ interface AddressState {
   state: string
 }
 
+interface BillingAddressState extends AddressState {
+  postalCode: string
+}
+
+// Filter the scope-group's rate mods down to the ones that apply to a specific
+// scope. A ScopeId of 0 means "applies to every scope in the group" — common
+// for group-wide extras.
+const rateModsForScope = (all: RateModification[], scopeId: number) =>
+  all.filter(rm => rm.ScopeId === 0 || rm.ScopeId === scopeId)
+
 export function StepHomeAndPricing({
-  selectedFrequency,
-  onFrequencyChange,
-  selectedModifications,
-  onModificationsChange,
+  frequencyByScope,
+  onFrequencyByScopeChange,
+  modsByScope,
+  onModsByScopeChange,
   onRateModificationsLoaded,
   questions,
-  onQuestionsLoaded,
   questionsUnavailable,
-  onQuestionsUnavailableChange,
   questionAnswers,
   onQuestionAnswersChange,
   onCompleted,
@@ -86,119 +97,133 @@ export function StepHomeAndPricing({
     state: formData.customer?.address?.state ?? "",
   })
   const [addressErrors, setAddressErrors] = useState<Partial<Record<keyof AddressState, string>>>({})
+  const [billingSameAsService, setBillingSameAsService] = useState<boolean>(
+    formData.payment?.billingAddress?.sameAsService ?? true
+  )
+  const [billingAddress, setBillingAddress] = useState<BillingAddressState>({
+    line1: formData.payment?.billingAddress?.street ?? "",
+    line2: "",
+    city: formData.payment?.billingAddress?.city ?? "",
+    state: formData.payment?.billingAddress?.state ?? "",
+    postalCode: formData.payment?.billingAddress?.zipCode ?? "",
+  })
+  const [billingErrors, setBillingErrors] = useState<Partial<Record<keyof BillingAddressState, string>>>({})
   const [loadingCustomization, setLoadingCustomization] = useState(false)
   const [submissionError, setSubmissionError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const scopeGroupId = formData.selectedScopeGroup?.ScopeGroupId
-  const scopeId = formData.selectedScope?.ScopeId
+  const selectedScopes = formData.selectedScopes
+  const scopeIdsKey = selectedScopes.map(s => s.ScopeId).sort((a, b) => a - b).join(",")
 
-  // Load rate modifications + questions when a service is picked.
+  // Load rate modifications once the scope group is known. Each scope card
+  // filters the list locally by ScopeId.
   useEffect(() => {
-    if (!token || !scopeGroupId || !scopeId) return
+    if (!token || !scopeGroupId || selectedScopes.length === 0) return
 
     let cancelled = false
     setLoadingCustomization(true)
 
-    Promise.all([
-      bookingDataService
-        .getRateModifications(token, scopeGroupId)
-        .then(res =>
-          (res.Result ?? []).filter(
-            rm => !rm.IsPercentage && rm.Cost >= 0 && rm.RateModificationType === "Cleaning Extras"
-          )
+    bookingDataService
+      .getRateModifications(token, scopeGroupId)
+      .then(res =>
+        (res.Result ?? []).filter(
+          rm => !rm.IsPercentage && rm.Cost >= 0 && rm.RateModificationType === "Cleaning Extras"
         )
-        .catch(() => [] as RateModification[]),
-      bookingDataService
-        .getQuestions(token, [scopeId])
-        .then(res => {
-          if (res.IsSuccess === false) {
-            return { unavailable: true, items: [] as QuestionData[] }
-          }
-          return { unavailable: false, items: res.Result ?? [] }
-        })
-        .catch(() => ({ unavailable: true, items: [] as QuestionData[] })),
-    ]).then(([rateMods, questionsResult]) => {
-      if (cancelled) return
-      setRateModifications(rateMods)
-      onRateModificationsLoaded(rateMods)
-      onQuestionsLoaded(questionsResult.items)
-      onQuestionsUnavailableChange(questionsResult.unavailable)
-      const required = rateMods.filter(rm => rm.IsRequired)
-      if (required.length) {
-        onModificationsChange(prev => {
-          const next = { ...prev }
-          required.forEach(r => {
-            next[r.RateModificationId] = 1
+      )
+      .catch(() => [] as RateModification[])
+      .then(rateMods => {
+        if (cancelled) return
+        setRateModifications(rateMods)
+        onRateModificationsLoaded(rateMods)
+        // Auto-check required rate mods for every scope they apply to.
+        const required = rateMods.filter(rm => rm.IsRequired)
+        if (required.length) {
+          onModsByScopeChange(prev => {
+            const next = { ...prev }
+            for (const scope of selectedScopes) {
+              const current = { ...(next[scope.ScopeId] ?? {}) }
+              for (const rm of required) {
+                if (rm.ScopeId === 0 || rm.ScopeId === scope.ScopeId) {
+                  current[rm.RateModificationId] = 1
+                }
+              }
+              next[scope.ScopeId] = current
+            }
+            return next
           })
-          return next
-        })
-      }
-      setLoadingCustomization(false)
-    })
+        }
+        setLoadingCustomization(false)
+      })
 
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, scopeGroupId, scopeId])
+  }, [token, scopeGroupId, scopeIdsKey])
 
-  // Questions rendered inside Step 2 (before + during pricing). Questions
-  // tagged "After Pricing" are rendered on Step 3 instead.
-  const beforePricingQuestions = filterQuestionsForStep(questions, "beforePricing")
+  // Step 2 only renders during-pricing questions — before-pricing lives on
+  // Step 1 and after-pricing on Step 3.
   const duringPricingQuestions = filterQuestionsForStep(questions, "duringPricing")
-  const step2Questions = [...beforePricingQuestions, ...duringPricingQuestions]
 
-  // Only this step's required questions gate Continue; afterPricing required
-  // questions are the responsibility of Step 3.
-  const allRequiredStep2QuestionsAnswered = step2Questions
+  const allRequiredStep2QuestionsAnswered = duringPricingQuestions
     .filter(q => q.IsRequired)
     .every(q => {
       const answer = questionAnswers[q.QuestionId]
       return answer !== undefined && answer.toString().trim() !== ""
     })
 
+  const everyScopeHasFrequency =
+    selectedScopes.length > 0 && selectedScopes.every(s => !!frequencyByScope[s.ScopeId])
+
   const canCalculatePrice =
     !!token &&
     !!formData.selectedScopeGroup &&
-    !!formData.selectedScope &&
-    !!selectedFrequency &&
+    everyScopeHasFrequency &&
     allRequiredStep2QuestionsAnswered
+
+  const frequencyKey = selectedScopes
+    .map(s => `${s.ScopeId}:${frequencyByScope[s.ScopeId]?.FrequencyId ?? ""}`)
+    .join("|")
+  const modificationsKey = JSON.stringify(modsByScope)
+  const answersKey = JSON.stringify(questionAnswers)
 
   // Auto-recalculate pricing whenever any input that affects price changes.
   // Debounced so typing in a Whole Number question doesn't spam the API.
-  // Stringify the maps once per render so the effect deps stay shallow-comparable
-  // and the eslint plugin can statically check them.
-  const modificationsKey = JSON.stringify(selectedModifications)
-  const answersKey = JSON.stringify(questionAnswers)
-
   useEffect(() => {
     if (!canCalculatePrice || !token) return
     const handle = setTimeout(() => {
       calculatePricingAsync(token, {
-        selectedModifications,
+        frequencyByScope,
+        modsByScope,
         questionAnswers,
         rateModifications,
       })
     }, 400)
     return () => clearTimeout(handle)
-    // selectedModifications/questionAnswers/rateModifications are intentionally
-    // referenced through their stringified key + the stable reference inside the
-    // timeout callback, not as effect dependencies — re-running on every shallow
-    // change would cancel the debounce.
+    // The _Key values stringify the records so the effect fires only on actual
+    // content changes. Shallow-comparing the record references would cancel
+    // every debounce and re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canCalculatePrice, token, selectedFrequency?.FrequencyId, modificationsKey, answersKey])
+  }, [canCalculatePrice, token, frequencyKey, modificationsKey, answersKey])
 
-  const handleFrequencyChange = (frequency: Frequency) => {
-    onFrequencyChange(frequency)
-    updateFormData({ selectedFrequency: frequency })
+  const handleFrequencyChange = (scopeId: number, frequency: Frequency) => {
+    onFrequencyByScopeChange(prev => ({ ...prev, [scopeId]: frequency }))
+    // Mirror the first scope's frequency into the legacy singular field so
+    // consumers that haven't migrated (BookingLayout badge, single-page flow)
+    // keep showing something sensible.
+    if (selectedScopes[0]?.ScopeId === scopeId) {
+      updateFormData({ selectedFrequency: frequency })
+    }
   }
 
-  const handleToggleRateMod = (id: number, nextQuantity: number) => {
-    onModificationsChange(prev => {
+  const handleToggleRateMod = (scopeId: number, modId: number, nextQuantity: number) => {
+    onModsByScopeChange(prev => {
       const next = { ...prev }
-      if (nextQuantity <= 0) delete next[id]
-      else next[id] = nextQuantity
+      const current = { ...(next[scopeId] ?? {}) }
+      if (nextQuantity <= 0) delete current[modId]
+      else current[modId] = nextQuantity
+      next[scopeId] = current
       return next
     })
   }
@@ -217,6 +242,21 @@ export function StepHomeAndPricing({
     return Object.keys(next).length === 0
   }
 
+  const validateBillingAddress = (): boolean => {
+    if (billingSameAsService) {
+      setBillingErrors({})
+      return true
+    }
+    const next: Partial<Record<keyof BillingAddressState, string>> = {}
+    if (!billingAddress.line1.trim()) next.line1 = "Required"
+    if (!billingAddress.city.trim()) next.city = "Required"
+    if (!billingAddress.state.trim()) next.state = "Required"
+    else if (billingAddress.state.trim().length !== 2) next.state = "Use 2-letter state code"
+    if (!billingAddress.postalCode.trim()) next.postalCode = "Required"
+    setBillingErrors(next)
+    return Object.keys(next).length === 0
+  }
+
   const canContinue =
     canCalculatePrice &&
     address.line1.trim() !== "" &&
@@ -225,16 +265,40 @@ export function StepHomeAndPricing({
     formData.pricing.total > 0 &&
     !!formData.leadId
 
+  const buildQuoteScopesOfWork = (): QuoteScopeOfWork[] =>
+    selectedScopes.map(scope => {
+      const frequency = frequencyByScope[scope.ScopeId]
+      const scopeMods = modsByScope[scope.ScopeId] ?? {}
+      const isFrequencyRecurring = frequency?.FrequencyId !== undefined && frequency.FrequencyId !== "S"
+      const rateMods: QuoteRateModification[] = Object.entries(scopeMods)
+        .filter(([, quantity]) => quantity > 0)
+        .map(([modId, quantity]) => {
+          const id = parseInt(modId)
+          const rateMod = rateModifications.find(r => r.RateModificationId === id)
+          return {
+            RateModificationId: id,
+            Quantity: quantity,
+            IsRecurring: isFrequencyRecurring && rateMod?.IsRecurring === true,
+          }
+        })
+      return {
+        ScopeOfWorkId: scope.ScopeId,
+        FrequencyId: frequency?.FrequencyId ?? "",
+        RateModifications: rateMods,
+      }
+    })
+
   const handleContinue = async () => {
     setSubmissionError("")
-    if (!validateAddress()) return
+    const addrOk = validateAddress()
+    const billingOk = validateBillingAddress()
+    if (!addrOk || !billingOk) return
     if (
       !canContinue ||
       !token ||
       !formData.leadId ||
-      !selectedFrequency ||
-      !formData.selectedScope ||
-      !formData.selectedScopeGroup
+      !formData.selectedScopeGroup ||
+      selectedScopes.length === 0
     ) {
       return
     }
@@ -243,19 +307,6 @@ export function StepHomeAndPricing({
     try {
       const postalCode = formData.validatedPostalCode?.PostalCode ?? formData.zipCode
 
-      const quoteRateMods: QuoteRateModification[] = Object.entries(selectedModifications)
-        .filter(([, quantity]) => quantity > 0)
-        .map(([modId, quantity]) => {
-          const id = parseInt(modId)
-          const rateMod = rateModifications.find(r => r.RateModificationId === id)
-          const isFrequencyRecurring = selectedFrequency.FrequencyId !== "S"
-          return {
-            RateModificationId: id,
-            Quantity: quantity,
-            IsRecurring: isFrequencyRecurring && rateMod?.IsRecurring === true,
-          }
-        })
-
       const quoteQuestions: QuoteQuestion[] = Object.entries(questionAnswers)
         .filter(([, answer]) => answer && answer.trim() !== "")
         .map(([questionId, answer]) => ({
@@ -263,13 +314,21 @@ export function StepHomeAndPricing({
           Answer: answer,
         }))
 
-      const scopesOfWork: QuoteScopeOfWork[] = [
-        {
-          ScopeOfWorkId: formData.selectedScope.ScopeId,
-          FrequencyId: selectedFrequency.FrequencyId,
-          RateModifications: quoteRateMods,
-        },
-      ]
+      const effectiveBilling = billingSameAsService
+        ? {
+            line1: address.line1.trim(),
+            line2: address.line2.trim() || undefined,
+            city: address.city.trim(),
+            state: address.state.trim().toUpperCase(),
+            postalCode,
+          }
+        : {
+            line1: billingAddress.line1.trim(),
+            line2: billingAddress.line2.trim() || undefined,
+            city: billingAddress.city.trim(),
+            state: billingAddress.state.trim().toUpperCase(),
+            postalCode: billingAddress.postalCode.trim(),
+          }
 
       const quoteRequest: QuoteCreateRequest = {
         LeadId: formData.leadId,
@@ -279,17 +338,18 @@ export function StepHomeAndPricing({
         HomeCity: address.city.trim(),
         HomeRegion: address.state.trim().toUpperCase(),
         HomePostalCode: postalCode,
-        BillingAddress1: address.line1.trim(),
-        BillingAddress2: address.line2.trim() || undefined,
-        BillingCity: address.city.trim(),
-        BillingRegion: address.state.trim().toUpperCase(),
-        BillingPostalCode: postalCode,
-        SendQuoteEmail: false,
+        BillingAddress1: effectiveBilling.line1,
+        BillingAddress2: effectiveBilling.line2,
+        BillingCity: effectiveBilling.city,
+        BillingRegion: effectiveBilling.state,
+        BillingPostalCode: effectiveBilling.postalCode,
+        SendQuoteEmail: true,
         AddToCampaigns: true,
         TriggerWebhook: true,
         ScopeGroupId: formData.selectedScopeGroup.ScopeGroupId,
-        ScopesOfWork: scopesOfWork,
+        ScopesOfWork: buildQuoteScopesOfWork(),
         Questions: quoteQuestions,
+        ...utmToApiFields(formData.utm),
       }
 
       const response = await leadService.createOrUpdateQuote(token, quoteRequest)
@@ -313,6 +373,16 @@ export function StepHomeAndPricing({
             zipCode: postalCode,
           },
         },
+        payment: {
+          ...formData.payment,
+          billingAddress: {
+            sameAsService: billingSameAsService,
+            street: effectiveBilling.line1,
+            city: effectiveBilling.city,
+            state: effectiveBilling.state,
+            zipCode: effectiveBilling.postalCode,
+          },
+        },
       })
 
       onCompleted()
@@ -323,47 +393,47 @@ export function StepHomeAndPricing({
     }
   }
 
+  const showScopeHeaders = selectedScopes.length > 1
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-[30px] font-bold text-gray-900 mb-2">Your home &amp; pricing</h2>
         <p className="text-gray-600">
-          Tell us about the service and where we&rsquo;ll be cleaning so we can generate a quote.
+          Pick how often you&rsquo;d like {selectedScopes.length > 1 ? "each service" : "service"},
+          add any extras, and tell us where we&rsquo;ll be cleaning so we can price your quote.
         </p>
       </div>
 
-      <ServiceSelection />
+      {selectedScopes.map(scope => {
+        const scopeFrequency = frequencyByScope[scope.ScopeId] ?? null
+        const scopeMods = rateModsForScope(rateModifications, scope.ScopeId)
+        return (
+          <div key={scope.ScopeId} className="space-y-6">
+            {showScopeHeaders && (
+              <div className="border-l-4 border-blue-600 pl-3">
+                <h3 className="text-lg font-semibold text-gray-900">{scope.Name}</h3>
+              </div>
+            )}
+            <FrequencyPicker
+              frequencies={scope.Frequencies}
+              selectedFrequencyId={scopeFrequency?.FrequencyId ?? null}
+              onChange={freq => handleFrequencyChange(scope.ScopeId, freq)}
+            />
+            {scopeFrequency && scopeMods.length > 0 && (
+              <RateModsPicker
+                rateModifications={scopeMods}
+                selectedQuantities={modsByScope[scope.ScopeId] ?? {}}
+                onToggle={(id, qty) => handleToggleRateMod(scope.ScopeId, id, qty)}
+              />
+            )}
+          </div>
+        )
+      })}
 
-      {/* "Before Pricing" questions render as soon as the scope is picked —
-          they often drive the quote (e.g. square footage, bedrooms). */}
-      {formData.selectedScope && !loadingCustomization && beforePricingQuestions.length > 0 && (
-        <QuestionsForm
-          title="A few details"
-          questions={beforePricingQuestions}
-          answers={questionAnswers}
-          onChange={setQuestionAnswer}
-        />
-      )}
-
-      {formData.selectedScope && (
-        <FrequencyPicker
-          frequencies={formData.selectedScope.Frequencies}
-          selectedFrequencyId={selectedFrequency?.FrequencyId ?? null}
-          onChange={handleFrequencyChange}
-        />
-      )}
-
-      {selectedFrequency && (
-        <RateModsPicker
-          rateModifications={rateModifications}
-          selectedQuantities={selectedModifications}
-          onToggle={handleToggleRateMod}
-        />
-      )}
-
-      {/* "During Pricing" questions (the default bucket when QuestionStepType is
-          missing) render alongside the pricing card. */}
-      {selectedFrequency && !loadingCustomization && (duringPricingQuestions.length > 0 || questionsUnavailable) && (
+      {/* "During Pricing" questions span all scopes — the API returns them
+          per-scope but IDs are unique, so one form covers the whole group. */}
+      {everyScopeHasFrequency && !loadingCustomization && (duringPricingQuestions.length > 0 || questionsUnavailable) && (
         <QuestionsForm
           questions={duringPricingQuestions}
           answers={questionAnswers}
@@ -372,7 +442,7 @@ export function StepHomeAndPricing({
         />
       )}
 
-      {selectedFrequency && (
+      {everyScopeHasFrequency && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
           <Card>
             <CardHeader>
@@ -430,16 +500,99 @@ export function StepHomeAndPricing({
                   {addressErrors.state && <p className="text-red-600 text-xs mt-1">{addressErrors.state}</p>}
                 </div>
               </div>
+
+              <div className="pt-2 border-t border-gray-100">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-blue-600"
+                    checked={billingSameAsService}
+                    onChange={e => setBillingSameAsService(e.target.checked)}
+                  />
+                  <span className="text-sm text-gray-800">
+                    Billing address is the same as service address
+                  </span>
+                </label>
+              </div>
+
+              {!billingSameAsService && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="space-y-4 pt-2"
+                >
+                  <div className="text-sm font-medium text-gray-900">Billing address</div>
+                  <div>
+                    <Label htmlFor="billingLine1" variant="required">Street address</Label>
+                    <Input
+                      id="billingLine1"
+                      value={billingAddress.line1}
+                      onChange={e => setBillingAddress(prev => ({ ...prev, line1: e.target.value }))}
+                      className={cn("mt-2", billingErrors.line1 && "border-red-500")}
+                      aria-invalid={!!billingErrors.line1}
+                    />
+                    {billingErrors.line1 && <p className="text-red-600 text-xs mt-1">{billingErrors.line1}</p>}
+                  </div>
+                  <div>
+                    <Label htmlFor="billingLine2">Apt / suite (optional)</Label>
+                    <Input
+                      id="billingLine2"
+                      value={billingAddress.line2}
+                      onChange={e => setBillingAddress(prev => ({ ...prev, line2: e.target.value }))}
+                      className="mt-2"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <Label htmlFor="billingCity" variant="required">City</Label>
+                      <Input
+                        id="billingCity"
+                        value={billingAddress.city}
+                        onChange={e => setBillingAddress(prev => ({ ...prev, city: e.target.value }))}
+                        className={cn("mt-2", billingErrors.city && "border-red-500")}
+                        aria-invalid={!!billingErrors.city}
+                      />
+                      {billingErrors.city && <p className="text-red-600 text-xs mt-1">{billingErrors.city}</p>}
+                    </div>
+                    <div>
+                      <Label htmlFor="billingState" variant="required">State</Label>
+                      <Input
+                        id="billingState"
+                        value={billingAddress.state}
+                        onChange={e =>
+                          setBillingAddress(prev => ({ ...prev, state: e.target.value.toUpperCase() }))
+                        }
+                        className={cn("mt-2", billingErrors.state && "border-red-500")}
+                        aria-invalid={!!billingErrors.state}
+                        placeholder="e.g. SC"
+                        maxLength={2}
+                      />
+                      {billingErrors.state && <p className="text-red-600 text-xs mt-1">{billingErrors.state}</p>}
+                    </div>
+                    <div>
+                      <Label htmlFor="billingZip" variant="required">Postal code</Label>
+                      <Input
+                        id="billingZip"
+                        value={billingAddress.postalCode}
+                        onChange={e =>
+                          setBillingAddress(prev => ({ ...prev, postalCode: e.target.value }))
+                        }
+                        className={cn("mt-2", billingErrors.postalCode && "border-red-500")}
+                        aria-invalid={!!billingErrors.postalCode}
+                      />
+                      {billingErrors.postalCode && (
+                        <p className="text-red-600 text-xs mt-1">{billingErrors.postalCode}</p>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
       )}
 
-      {submissionError && (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
-          {submissionError}
-        </div>
-      )}
+      <ApiErrorBanner message={submissionError} />
 
       <div className="flex justify-between pt-2">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting}>
