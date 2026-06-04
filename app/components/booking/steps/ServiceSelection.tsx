@@ -27,7 +27,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
     setSelectedScope(null)
     updateFormData({
       selectedScopeGroup: scopeGroup,
-      selectedScope: null,
+      selectedScope: undefined,
     })
   }, [updateFormData])
 
@@ -156,7 +156,7 @@ export const ServiceSelection = memo(function ServiceSelection() {
               {/* Empty state message */}
               {availableScopes.length === 0 ? (
                 <div className="text-center p-8 bg-gray-50 rounded-lg mt-2">
-                  <p className="text-gray-600">No services are currently available for "{selectedScopeGroup.Name}"</p>
+                  <p className="text-gray-600">No services are currently available for &ldquo;{selectedScopeGroup.Name}&rdquo;</p>
                   <p className="text-sm text-gray-500 mt-2">Please select a different service type.</p>
                 </div>
               ) : (

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { BookingProvider, useBooking } from "@/app/contexts/BookingContext"
-import { useAuth } from "./AuthenticationProvider"
+import { AuthenticationProvider, useAuth } from "./AuthenticationProvider"
 import { BookingLayout } from "./BookingLayout"
 import { PricingSummary } from "./PricingSummary"
 import { ServiceSelection } from "./steps/ServiceSelection"
@@ -15,7 +15,6 @@ import { MultiSelect } from "@/app/components/ui/multi-select"
 import { Calendar, MapPin, Clock, Check, Plus, Settings, User, CreditCard } from "lucide-react"
 import { motion } from "framer-motion"
 import { bookingDataService, PostalCodeResult, RateModification, Frequency, QuestionData } from "@/app/services/api/booking-data"
-import { maidCentralApi } from "@/app/services/api/maidcentral"
 import { leadService } from "@/app/services/api/lead"
 import { bookQuoteService } from "@/app/services/api/bookquote"
 import { CustomerDetailsForm, CustomerDetailsFormRef } from "./CustomerDetailsForm"
@@ -78,14 +77,6 @@ function SinglePageBookingContent() {
   const [submissionError, setSubmissionError] = useState("")
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [bookedCustomerEmail, setBookedCustomerEmail] = useState("")
-
-  // Pricing validation errors
-  const [pricingValidationErrors, setPricingValidationErrors] = useState<{
-    service?: boolean
-    frequency?: boolean
-    questions?: number[]
-  }>({})
-  const [hasPricingValidationAttempted, setHasPricingValidationAttempted] = useState(false)
 
   // Payment tokenization state
   const [paymentToken, setPaymentToken] = useState<string | null>(null)
@@ -197,60 +188,24 @@ function SinglePageBookingContent() {
       setAvailabilityLoading(true)
       setAvailabilityError("")
 
-      // Calculate date range (next 30 days)
       const startDate = new Date()
       const endDate = new Date()
       endDate.setDate(endDate.getDate() + 30)
 
-      const startDateStr = startDate.toISOString().split('T')[0]
-      const endDateStr = endDate.toISOString().split('T')[0]
-      const scopeGroupId = formData.selectedScopeGroup.ScopeGroupId
-
-      // Loading availability data
-
-      // TEST 1: Direct fetch (bypass all wrappers)
-      try {
-        const directResponse = await fetch(
-          `https://mccleaners.maidcentral.net/api/Lead/Availability?scopeGroupId=${scopeGroupId}&hours=2&startDate=${startDateStr}&endDate=${endDateStr}`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Accept': 'application/json'
-            }
-          }
-        )
-        const directEnd = performance.now()
-
-        if (directResponse.ok) {
-          const directData = await directResponse.json()
-          if (directData.Result) {
-            setAvailableDates(directData.Result)
-            return // Exit early if direct fetch works
-          }
-        } else {
-        }
-      } catch (directError) {
-      }
-
-      // TEST 2: Wrapped service call (fallback if direct fails)
-      const wrappedStart = performance.now()
       const response = await bookingDataService.getAvailability(
         token,
-        scopeGroupId,
+        formData.selectedScopeGroup.ScopeGroupId,
         2,
-        startDateStr,
-        endDateStr
+        startDate.toISOString().split('T')[0],
+        endDate.toISOString().split('T')[0]
       )
-      const wrappedEnd = performance.now()
 
-      if (response && response.Result) {
+      if (response?.Result) {
         setAvailableDates(response.Result)
       } else {
         setAvailabilityError("No available dates found")
       }
-
-    } catch (error: any) {
+    } catch {
       setAvailabilityError("Unable to load available dates. Please try again.")
     } finally {
       setAvailabilityLoading(false)
@@ -294,31 +249,11 @@ function SinglePageBookingContent() {
     })
   }, [updateFormData])
 
-  // Performance monitoring - track component renders (simplified)
-  const renderCountRef = useRef(0)
-  useEffect(() => {
-    renderCountRef.current += 1
-
-    // Only warn when thresholds are crossed to avoid log spam
-    if (renderCountRef.current === 10) {
-    } else if (renderCountRef.current === 20) {
-    } else if (renderCountRef.current === 50) {
-    }
-  })
-
-  // Clear service error when service is selected
-  useEffect(() => {
-    if (formData.selectedScope && pricingValidationErrors.service) {
-      setPricingValidationErrors(prev => ({ ...prev, service: undefined }))
-    }
-  }, [formData.selectedScope])
-
-  // Load customization data when service is selected (optimized dependencies)
   useEffect(() => {
     if (token && formData.selectedScopeGroup && formData.selectedScope) {
       loadCustomizationData()
     }
-  }, [token, formData.selectedScopeGroup?.ScopeGroupId, formData.selectedScope?.ScopeId]) // Only depend on IDs
+  }, [token, formData.selectedScopeGroup?.ScopeGroupId, formData.selectedScope?.ScopeId])
 
   const loadCustomizationData = async () => {
     if (!token || !formData.selectedScopeGroup || !formData.selectedScope) return
@@ -326,50 +261,30 @@ function SinglePageBookingContent() {
     try {
       setCustomizationLoading(true)
       setCustomizationError("")
-
-      
-      // Clear any previously selected modifications when service changes
       setSelectedModifications({})
 
-      // Load rate modifications first
-      let rateModsResponse
-      let nonPercentageModifications: any[] = []
+      let nonPercentageModifications: RateModification[] = []
       try {
-        rateModsResponse = await bookingDataService.getRateModifications(token, formData.selectedScopeGroup.ScopeGroupId)
+        const rateModsResponse = await bookingDataService.getRateModifications(
+          token,
+          formData.selectedScopeGroup.ScopeGroupId
+        )
         if (rateModsResponse.Result) {
-          // Rate modifications loaded successfully
-
-          // Filter by ScopeId and exclude discount codes and fees
-          const filteredMods = rateModsResponse.Result.filter(
-            rm => rm.ScopeId === formData.selectedScope.ScopeId &&
-                  rm.RateModificationType !== "Discount Codes" &&
-                  rm.RateModificationType !== "Fees"
+          setAllRateModifications(rateModsResponse.Result)
+          nonPercentageModifications = rateModsResponse.Result.filter(
+            rm => !rm.IsPercentage && rm.Cost >= 0 && rm.RateModificationType === "Cleaning Extras"
           )
-
-          // Store the FILTERED list for pricing calculation (only mods for this scope)
-          setAllRateModifications(filteredMods)
-
-          // Track excluded mods for debugging
-          const excludedMods = rateModsResponse.Result.filter(
-            rm => rm.ScopeId !== formData.selectedScope.ScopeId ||
-                  rm.RateModificationType === "Discount Codes" ||
-                  rm.RateModificationType === "Fees"
-          )
-
-          // Some rate modifications were excluded from the UI
-
-          nonPercentageModifications = filteredMods
           setRateModifications(nonPercentageModifications)
-
-          // Rate modifications filtered and ready for display
         }
-      } catch (error) {
+      } catch {
+        // Non-fatal: rate modifications are optional for basic booking.
       }
-      
-      // Load questions separately with error handling
+
       try {
-        const questionsResponse = await bookingDataService.getQuestions(token, [formData.selectedScope.ScopeId])
-        
+        const questionsResponse = await bookingDataService.getQuestions(
+          token,
+          [formData.selectedScope.ScopeId]
+        )
         if (questionsResponse.IsSuccess === false) {
           setQuestions([])
           setQuestionsUnavailable(true)
@@ -377,102 +292,50 @@ function SinglePageBookingContent() {
           setQuestions(questionsResponse.Result)
           setQuestionsUnavailable(false)
         }
-      } catch (error: any) {
+      } catch {
         setQuestions([])
         setQuestionsUnavailable(true)
       }
-      
-      // Auto-select required modifications
-      if (nonPercentageModifications && nonPercentageModifications.length > 0) {
-        const requiredMods = nonPercentageModifications.filter(rm => rm.IsRequired)
-        if (requiredMods.length > 0) {
-          setSelectedModifications(prev => {
-            const newSelectedMods = { ...prev }
-            requiredMods.forEach(mod => {
-              newSelectedMods[mod.RateModificationId] = 1
-            })
-            return newSelectedMods
-          })
-        }
+
+      const requiredMods = nonPercentageModifications.filter(rm => rm.IsRequired)
+      if (requiredMods.length > 0) {
+        setSelectedModifications(prev => {
+          const next = { ...prev }
+          requiredMods.forEach(mod => { next[mod.RateModificationId] = 1 })
+          return next
+        })
       }
-      
-    } catch (error: any) {
+    } catch {
       setCustomizationError("Unable to load customization options. Please try again.")
     } finally {
       setCustomizationLoading(false)
     }
   }
 
-  // Removed automatic debounced pricing - now manual only
-
-  // Manual pricing calculation function (no automatic triggering)
   const calculatePricing = useCallback(async () => {
-    setHasPricingValidationAttempted(true)
-
-    // Track validation errors
-    const errors: {
-      service?: boolean
-      frequency?: boolean
-      questions?: number[]
-    } = {}
-
-    // Check service selection
-    if (!formData.selectedScopeGroup || !formData.selectedScope) {
-      errors.service = true
+    if (!token || !formData.selectedScopeGroup || !formData.selectedScope || !selectedFrequency) {
+      return
     }
 
-    // Check frequency selection
-    if (!selectedFrequency) {
-      errors.frequency = true
-    }
-
-    // Check required questions
     const requiredQuestions = questions.filter(q => q.IsRequired)
-    const unansweredQuestions: number[] = []
-
-    requiredQuestions.forEach(q => {
+    const hasAnsweredRequired = requiredQuestions.every(q => {
       const answer = questionAnswers[q.QuestionId]
-      if (!answer || answer.toString().trim() === "") {
-        unansweredQuestions.push(q.QuestionId)
-      }
+      return answer && answer.toString().trim() !== ""
     })
 
-    if (unansweredQuestions.length > 0) {
-      errors.questions = unansweredQuestions
-    }
+    if (!hasAnsweredRequired) return
 
-    // Set validation errors
-    setPricingValidationErrors(errors)
-
-    // If there are any errors, don't proceed with pricing calculation
-    if (errors.service || errors.frequency || errors.questions) {
-      return
-    }
-
-    // Clear errors if everything is valid
-    setPricingValidationErrors({})
-
-    if (!token) {
-      return
-    }
-
-    const currentWidgetState = {
+    await calculatePricingAsync(token, {
       selectedModifications,
       questionAnswers,
-      rateModifications: allRateModifications
-    }
-
-    await calculatePricingAsync(token, currentWidgetState)
+      rateModifications: allRateModifications,
+    })
   }, [token, formData.selectedScopeGroup, formData.selectedScope, selectedFrequency, questions, questionAnswers, selectedModifications, allRateModifications, calculatePricingAsync])
 
   const handleFrequencySelect = useCallback(async (frequency: Frequency) => {
     setSelectedFrequency(frequency)
     updateFormData({ selectedFrequency: frequency })
-    // Clear frequency error when user selects
-    if (pricingValidationErrors.frequency) {
-      setPricingValidationErrors(prev => ({ ...prev, frequency: undefined }))
-    }
-  }, [updateFormData, pricingValidationErrors.frequency])
+  }, [updateFormData])
 
   const handleModificationToggle = useCallback((modId: number, quantity: number = 1) => {
     setSelectedModifications(prev => {
@@ -491,14 +354,7 @@ function SinglePageBookingContent() {
       ...prev,
       [questionId]: answer
     }))
-    // Clear question error when user answers
-    if (pricingValidationErrors.questions?.includes(questionId)) {
-      setPricingValidationErrors(prev => ({
-        ...prev,
-        questions: prev.questions?.filter(id => id !== questionId)
-      }))
-    }
-  }, [pricingValidationErrors.questions])
+  }, [])
 
   const handleMultiSelectAnswer = useCallback((questionId: number, selectedValues: string[]) => {
     // Join multiple AnswerIds with comma for API format
@@ -510,126 +366,82 @@ function SinglePageBookingContent() {
 
 
 
-  // Create or update lead when conditions are met
   const createOrUpdateLead = async () => {
-
-    // Don't create lead if already in progress or already created
-    if (leadCreationInProgress || leadCreationAttempted) {
-      return
-    }
-
-    // Check if all required data from previous sections is present
-    // Customer details will be validated separately
-    if (!arePreviousSectionsComplete()) {
-      return
-    }
-
+    if (leadCreationInProgress || leadCreationAttempted) return
+    if (!arePreviousSectionsComplete()) return
+    if (!token) return
 
     setLeadCreationInProgress(true)
     setLeadCreationAttempted(true)
 
-
     try {
-      // Get customer data from form ref
       if (!customerFormRef.current) {
         throw new Error('Customer form ref is not available')
       }
 
       const customerData = customerFormRef.current.getFormData()
 
-      // Build notes with service details
-      // Optimized lead payload - only essential fields for faster API response
       const leadData: LeadCreateRequest = {
         FirstName: customerData.firstName.trim(),
         LastName: customerData.lastName.trim(),
         Email: customerData.email.trim(),
         Phone: customerData.phone.replace(/\D/g, ''),
-        PostalCode: validatedPostalCode?.PostalCode || zipCode
+        PostalCode: validatedPostalCode?.PostalCode || zipCode,
       }
-
-
-      const apiCallStart = performance.now()
 
       const response = await leadService.createOrUpdate(token, leadData)
 
-      const apiCallEnd = performance.now()
-
-
-      // Check for the Result object which contains the LeadId
-      if (response.IsSuccess && response.Result && response.Result.LeadId) {
-        const leadId = response.Result.LeadId
-
+      // The API returns `{ IsSuccess, Result: { LeadId } }` on success; older
+      // responses occasionally put `LeadId` at the top level, so handle both.
+      const leadId = response.Result?.LeadId ?? response.LeadId
+      if (response.IsSuccess && leadId) {
         setLeadId(leadId)
         updateFormData({ leadId })
-
-
-        // Now create the quote with all booking details
         await createQuoteForLead(leadId, customerData)
-      } else if (response.LeadId) {
-        // Fallback for direct LeadId in response
-        setLeadId(response.LeadId)
-        updateFormData({ leadId: response.LeadId })
-
-        await createQuoteForLead(response.LeadId, customerData)
       } else {
-          // Lead creation failed with error response
+        setSubmissionError(
+          response.Message || response.ErrorMessage || 'Failed to create lead'
+        )
       }
-    } catch (error) {
-        // Error occurred during lead creation
+    } catch (error: any) {
+      setSubmissionError(error?.message || 'Failed to create lead')
     } finally {
       setLeadCreationInProgress(false)
     }
   }
 
-  // Create quote after lead is created
   const createQuoteForLead = async (leadId: number, customerData: any) => {
-    // Creating quote for lead
-
-
-    // Early validation
-    if (!formData.selectedScope || !formData.selectedScopeGroup) {
+    if (!formData.selectedScope || !formData.selectedScopeGroup || !selectedFrequency || !token) {
       return
     }
-
-    if (!selectedFrequency) {
-      return
-    }
-
 
     try {
-      // Build rate modifications for the quote
       const rateModifications: QuoteRateModification[] = Object.entries(selectedModifications)
         .filter(([_, quantity]) => quantity > 0)
         .map(([modId, quantity]) => {
           const modIdInt = parseInt(modId)
           const rateMod = allRateModifications.find(rm => rm.RateModificationId === modIdInt)
-
-          // Check if this modification should be recurring
-          const isFrequencyRecurring = selectedFrequency?.FrequencyId !== 'S'
+          const isFrequencyRecurring = selectedFrequency.FrequencyId !== 'S'
           const isModificationRecurring = rateMod?.IsRecurring === true
-
           return {
             Quantity: quantity,
             RateModificationId: modIdInt,
-            IsRecurring: isFrequencyRecurring && isModificationRecurring
+            IsRecurring: isFrequencyRecurring && isModificationRecurring,
           }
         })
 
-      // Build questions array
       const quoteQuestions: QuoteQuestion[] = Object.entries(questionAnswers)
         .filter(([_, answer]) => answer && answer.trim() !== '')
         .map(([questionId, answer]) => ({
           QuestionId: parseInt(questionId),
-          Answer: answer
+          Answer: answer,
         }))
 
-      // Build scope of work - this is REQUIRED
-      const scopesOfWork: QuoteScopeOfWork[] = []
-      scopesOfWork.push({
+      const scopesOfWork: QuoteScopeOfWork[] = [{
         ScopeOfWorkId: formData.selectedScope.ScopeId,
         FrequencyId: selectedFrequency.FrequencyId,
-        RateModifications: rateModifications
-      })
+        RateModifications: rateModifications,
+      }]
 
       const quoteData: QuoteCreateRequest = {
         LeadId: leadId,
@@ -646,71 +458,36 @@ function SinglePageBookingContent() {
         SendQuoteEmail: false,
         AddToCampaigns: true,
         TriggerWebhook: true,
-        ScopeGroupId: formData.selectedScopeGroup?.ScopeGroupId || 0,
+        ScopeGroupId: formData.selectedScopeGroup.ScopeGroupId,
         ScopesOfWork: scopesOfWork,
         Questions: quoteQuestions,
-        // Include payment token for PCI compliance
         PaymentToken: paymentToken || undefined,
-        PaymentExpiry: paymentExpiry || undefined
-      }
-
-
-
-      if (!token) {
-        return
+        PaymentExpiry: paymentExpiry || undefined,
       }
 
       const quoteResponse = await leadService.createOrUpdateQuote(token, quoteData)
-
-      // Check for the Result object which contains the QuoteId
-      if (quoteResponse.IsSuccess && quoteResponse.Result && quoteResponse.Result.QuoteId) {
-        const quoteId = quoteResponse.Result.QuoteId
+      const quoteId = quoteResponse.Result?.QuoteId ?? quoteResponse.QuoteId
+      if (quoteResponse.IsSuccess && quoteId) {
         setQuoteId(quoteId)
         updateFormData({ quoteId })
-      } else if (quoteResponse.QuoteId) {
-        // Fallback for direct QuoteId in response
-        setQuoteId(quoteResponse.QuoteId)
-        updateFormData({ quoteId: quoteResponse.QuoteId })
-      } else {
       }
-    } catch (error) {
-      // Don't throw - let the lead creation succeed even if quote fails
+    } catch {
+      // Quote creation failure is non-fatal — the lead is still saved.
     }
   }
 
   // Manual save handler for lead and quote creation
   const handleSaveContactInfo = async () => {
+    if (!arePreviousSectionsComplete()) return
+    if (!validateCustomerDetails()) return
+    if (leadCreationInProgress || leadCreationAttempted) return
 
-    // Validate that previous sections are complete
-    if (!arePreviousSectionsComplete()) {
-      return
-    }
-
-    // Validate customer details (will show errors if incomplete)
-    if (!validateCustomerDetails()) {
-      return
-    }
-
-    // Don't save if already in progress or already saved
-    if (leadCreationInProgress || leadCreationAttempted) {
-      return
-    }
-
-
-    // Call lead creation directly and await it
     try {
       await createOrUpdateLead()
-    } catch (error) {
+    } catch {
       setSubmissionError('Failed to save contact information. Please try again.')
       setLeadCreationInProgress(false)
     }
-
-    // Reset render count for next interaction
-    if (renderCountRef.current > 15) {
-    } else {
-    }
-
-    // Performance monitoring completed
   }
 
 
@@ -720,34 +497,24 @@ function SinglePageBookingContent() {
   }, [updateSaveButtonState, formData.selectedScope, formData.selectedScopeGroup, validatedPostalCode, selectedDate, selectedFrequency])
 
   const validateCustomerDetails = useCallback(() => {
-
-    if (!customerFormRef.current) {
-      return false
-    }
-
+    if (!customerFormRef.current) return false
     const validation = customerFormRef.current.validateForm()
-
     setCustomerErrors(validation.errors)
-
     return validation.isValid
   }, [])
 
-  // Payment tokenization handlers
   const handleTokenReceived = useCallback((token: string, expiry: string) => {
     setPaymentToken(token)
     setPaymentExpiry(expiry)
     setTokenizationError(null)
 
-    // Store in form data as well
     updateFormData({
       payment: {
         ...formData.payment,
         paymentToken: token,
-        paymentExpiry: expiry
-      }
+        paymentExpiry: expiry,
+      },
     })
-
-      // Payment token received successfully
   }, [formData.payment, updateFormData])
 
   const handleTokenizationError = useCallback((error: string) => {
@@ -821,16 +588,11 @@ function SinglePageBookingContent() {
       let finalLeadId = leadId
       let finalQuoteId = quoteId
 
-      // If we don't have a leadId yet, create the lead first
       if (!finalLeadId) {
-        await handleSaveClick()
-
-        // Wait a bit for state to update
+        await handleSaveContactInfo()
+        // Give React a moment to flush state updates from the save.
         await new Promise(resolve => setTimeout(resolve, 500))
 
-        // Now we should have leadId and quoteId from the save operation
-        // But we need to use the state values that will be set
-        // For now, we'll need to return and let user click again
         if (!leadId || !quoteId) {
           setSubmissionError('Please save your information first before booking')
           return
@@ -880,8 +642,9 @@ function SinglePageBookingContent() {
             }
           })
 
-        // Get the base fee from pricing or use a default
-        const baseFee = formData.pricing?.subtotal || 250
+        // Send the pre-adjustment CalculatedBaseCost as BaseFee so the server
+        // can re-apply RateModifications without double-counting.
+        const baseFee = formData.pricing?.baseFee || 250
 
         scopesOfWork.push({
           ScopeOfWorkId: formData.selectedScope.ScopeId,
@@ -919,10 +682,7 @@ function SinglePageBookingContent() {
         CustomerBillingPostalCode: validatedPostalCode?.PostalCode || zipCode
       }
 
-
-      // Call the booking API
       const bookingResponse = await bookQuoteService.bookQuote(token!, bookingRequest)
-
 
       if (bookingResponse.success) {
         // Update form data with booking information
@@ -941,8 +701,6 @@ function SinglePageBookingContent() {
 
     } catch (error: any) {
       setSubmissionError(error.message || 'Failed to complete booking. Please try again.')
-
-      // Scroll to customer section to show error
       customerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } finally {
       setIsSubmitting(false)
@@ -966,9 +724,6 @@ function SinglePageBookingContent() {
         {/* Section 1: Service Selection */}
         <div ref={serviceRef} data-testid="section-service" className="py-3 sm:py-6">
           <ServiceSelection />
-          {hasPricingValidationAttempted && pricingValidationErrors.service && (
-            <p className="text-red-600 text-sm mt-2">Please select a service before calculating price</p>
-          )}
         </div>
 
         <SectionDivider />
@@ -1011,12 +766,12 @@ function SinglePageBookingContent() {
                       {(formData.selectedScope?.Frequencies || []).map((frequency, index) => (
                         <motion.button
                           key={frequency.FrequencyId}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: index * 0.1 }}
                           onClick={() => handleFrequencySelect(frequency)}
                           className={cn(
-                            "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
+                            "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
                             selectedFrequency?.FrequencyId === frequency.FrequencyId
                               ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                               : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -1047,9 +802,6 @@ function SinglePageBookingContent() {
                         </motion.button>
                       ))}
                     </div>
-                    {hasPricingValidationAttempted && pricingValidationErrors.frequency && (
-                      <p className="text-red-600 text-sm mt-2">Please select a service frequency</p>
-                    )}
                   </CardContent>
                 </Card>
 
@@ -1083,7 +835,7 @@ function SinglePageBookingContent() {
                                 )}
                                 disabled={isRequired}
                                 className={cn(
-                                  "relative p-4 text-sm rounded-lg border-2 hover:shadow-sm text-left",
+                                  "relative p-4 text-sm rounded-lg border-2 transition-all hover:shadow-sm text-left",
                                   isSelected 
                                     ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
                                     : "border-gray-400 hover:border-blue-400 text-gray-800"
@@ -1121,41 +873,37 @@ function SinglePageBookingContent() {
                   </motion.div>
                 )}
 
-                {/* Service Questions - Split into required and optional */}
-                {(() => {
-                  const requiredQuestions = questions.filter(q => q.IsRequired);
-                  const optionalQuestions = questions.filter(q => !q.IsRequired);
-
-                  return (
-                    <>
-                      {/* Required Questions Card */}
-                      {(requiredQuestions.length > 0 || questionsUnavailable) && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.3 }}
-                        >
-                          <Card>
-                            <CardHeader>
-                              <CardTitle className="flex items-center gap-2">
-                                <Settings className="w-5 h-5" />
-                                Service Details
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                              {questionsUnavailable ? (
-                                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                                  <p className="text-yellow-800">
-                                    Service details questions are temporarily unavailable. You can continue with your booking.
-                                  </p>
-                                </div>
-                              ) : (
-                                <div className="grid grid-cols-1 gap-3 sm:gap-6">
-                                {requiredQuestions.map((question) => (
+                {/* Service Questions */}
+                {(questions.length > 0 || questionsUnavailable) && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Settings className="w-5 h-5" />
+                          Service Details
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {questionsUnavailable ? (
+                          <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                            <p className="text-yellow-800">
+                              Service details questions are temporarily unavailable. You can continue with your booking.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-6">
+                          {questions.map((question) => (
                             <div key={question.QuestionId}>
-                              <Label className="text-base font-medium">
+                              <Label className={cn(
+                                "text-base font-medium",
+                                question.IsRequired && "text-red-600"
+                              )}>
                                 {question.QuestionText}
-                                {question.IsRequired && <span className="text-red-600"> *</span>}
+                                {question.IsRequired && " *"}
                               </Label>
                               
                               {question.HelpText && (
@@ -1175,40 +923,18 @@ function SinglePageBookingContent() {
                                   onChange={(selectedValues) => handleMultiSelectAnswer(question.QuestionId, selectedValues)}
                                   placeholder="Select options..."
                                   className="mt-2"
-                                  isRequired={question.IsRequired}
                                 />
                               ) : question.QuestionType === "Select List" ? (
                                 <Select
                                   value={questionAnswers[question.QuestionId] || ""}
                                   onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
                                 >
-                                  <SelectTrigger className={cn(
-                                    "mt-2",
-                                    question.IsRequired && "!bg-white !border-red-200 !text-gray-900 [&>span]:!text-gray-900"
-                                  )}
-                                  style={question.IsRequired ? {
-                                    backgroundColor: '#ffffff',
-                                    borderColor: '#fecaca',
-                                    color: '#111827'
-                                  } : undefined}>
+                                  <SelectTrigger className="mt-2">
                                     <SelectValue placeholder="Select an option" />
                                   </SelectTrigger>
-                                  <SelectContent className={cn(
-                                    question.IsRequired && "!bg-white !border-gray-200 !text-gray-900 shadow-lg"
-                                  )}
-                                  style={question.IsRequired ? {
-                                    backgroundColor: '#ffffff',
-                                    borderColor: '#e5e7eb',
-                                    color: '#111827'
-                                  } : undefined}>
-                                    {question.Answers.map((answer, index) => (
-                                      <SelectItem
-                                        key={`${question.QuestionId}-answer-${index}`}
-                                        value={answer.AnswerId.toString()}
-                                        className={cn(
-                                          question.IsRequired && "!text-gray-900 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100"
-                                        )}
-                                      >
+                                  <SelectContent>
+                                    {question.Answers.map((answer) => (
+                                      <SelectItem key={`${question.QuestionId}-${answer.AnswerId}`} value={answer.AnswerId.toString()}>
                                         {answer.AnswerText}
                                       </SelectItem>
                                     ))}
@@ -1257,152 +983,39 @@ function SinglePageBookingContent() {
                                   className="mt-2"
                                 />
                               )}
-                              {hasPricingValidationAttempted &&
-                               pricingValidationErrors.questions?.includes(question.QuestionId) &&
-                               question.IsRequired && (
-                                <p className="text-red-600 text-sm mt-1">This field is required</p>
-                              )}
                             </div>
-                                ))}
-                                </div>
-                              )}
+                          ))}
+                          </div>
+                        )}
 
-                              {/* Calculate Pricing Button */}
-                              <div className="pt-2 sm:pt-4 border-t border-gray-200 mt-3 sm:mt-6">
-                                <Button
-                                  onClick={calculatePricing}
-                                  disabled={!formData.selectedScope || !selectedFrequency || isPricingLoading}
-                                  className="w-full sm:w-auto min-w-[200px]"
-                                  size="lg"
+                        {/* Calculate Pricing Button */}
+                        <div className="pt-2 sm:pt-4 border-t border-gray-200 mt-3 sm:mt-6">
+                          <Button
+                            onClick={calculatePricing}
+                            disabled={!formData.selectedScope || !selectedFrequency || isPricingLoading}
+                            className="w-full sm:w-auto min-w-[200px]"
+                            size="lg"
+                          >
+                            {isPricingLoading ? (
+                              <>
+                                <motion.div
+                                  animate={{ rotate: 360 }}
+                                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                  className="w-4 h-4 mr-2"
                                 >
-                                  {isPricingLoading ? (
-                                    <>
-                                      <motion.div
-                                        animate={{ rotate: 360 }}
-                                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                                        className="w-4 h-4 mr-2"
-                                      >
-                                        ⚙️
-                                      </motion.div>
-                                      Calculating...
-                                    </>
-                                  ) : (
-                                    "🧮 Calculate Pricing"
-                                  )}
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
-                      )}
-
-                      {/* Optional Questions Card - No title */}
-                      {optionalQuestions.length > 0 && !questionsUnavailable && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.3, delay: 0.1 }}
-                        >
-                          <Card>
-                            <CardContent className="pt-6">
-                              <div className="grid grid-cols-1 gap-3 sm:gap-6">
-                                {optionalQuestions.map((question) => (
-                                  <div key={question.QuestionId}>
-                                    <Label className="text-base font-medium">
-                                      {question.QuestionText}
-                                    </Label>
-
-                                    {question.HelpText && (
-                                      <p className="text-sm text-gray-500 mt-1">
-                                        {question.HelpText}
-                                      </p>
-                                    )}
-
-                                    {/* Handle different question types */}
-                                    {question.QuestionType === "Multiple Select List" ? (
-                                      <MultiSelect
-                                        options={question.Answers.map(answer => ({
-                                          label: answer.AnswerText,
-                                          value: answer.AnswerId.toString()
-                                        }))}
-                                        selected={(questionAnswers[question.QuestionId] || "").split(",").filter(Boolean)}
-                                        onChange={(selectedValues) => handleMultiSelectAnswer(question.QuestionId, selectedValues)}
-                                        placeholder="Select options..."
-                                        className="mt-2"
-                                        isRequired={question.IsRequired}
-                                      />
-                                    ) : question.QuestionType === "Select List" ? (
-                                      <Select
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onValueChange={(value) => handleQuestionAnswer(question.QuestionId, value)}
-                                      >
-                                        <SelectTrigger className="mt-2">
-                                          <SelectValue placeholder="Select an option" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {question.Answers.map((answer, index) => (
-                                            <SelectItem
-                                              key={`${question.QuestionId}-answer-${index}`}
-                                              value={answer.AnswerId.toString()}
-                                            >
-                                              {answer.AnswerText}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    ) : question.QuestionType === "Whole Number" ? (
-                                      <Input
-                                        type="number"
-                                        step="1"
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
-                                        placeholder="Enter a number"
-                                        className="mt-2"
-                                      />
-                                    ) : question.QuestionType === "Decimal" ? (
-                                      <Input
-                                        type="number"
-                                        step="0.01"
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
-                                        placeholder="Enter a decimal number"
-                                        className="mt-2"
-                                      />
-                                    ) : question.QuestionType === "Rich Text" ? (
-                                      <textarea
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
-                                        placeholder="Enter your notes..."
-                                        className="mt-2 w-full p-3 border border-gray-300 rounded-lg resize-y"
-                                        rows={3}
-                                      />
-                                    ) : question.QuestionText.toLowerCase().includes("phone") ? (
-                                      <Input
-                                        type="tel"
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
-                                        placeholder="Enter phone number"
-                                        className="mt-2"
-                                      />
-                                    ) : (
-                                      <Input
-                                        type="text"
-                                        value={questionAnswers[question.QuestionId] || ""}
-                                        onChange={(e) => handleQuestionAnswer(question.QuestionId, e.target.value)}
-                                        placeholder="Enter your answer"
-                                        className="mt-2"
-                                      />
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
-                      )}
-                    </>
-                  );
-                })()}
+                                  ⚙️
+                                </motion.div>
+                                Calculating...
+                              </>
+                            ) : (
+                              "🧮 Calculate Pricing"
+                            )}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )}
               </>
             )}
           </div>
@@ -1514,7 +1127,7 @@ function SinglePageBookingContent() {
                                 key={dateString}
                                 onClick={() => handleDateSelect(dateString)}
                                 className={cn(
-                                  "p-3 rounded-lg border-2 text-sm",
+                                  "p-3 rounded-lg border-2 transition-all text-sm",
                                   isSelected
                                     ? "border-blue-600 bg-blue-50 text-blue-700"
                                     : "border-gray-300 hover:border-blue-400"
@@ -1744,7 +1357,6 @@ function SinglePageBookingContent() {
             selectedDate={formData.selectedDate}
             selectedTime={formData.selectedTime}
             zipCode={formData.zipCode}
-            isSticky={false}
             isPricingLoading={isPricingLoading}
           />
         </div>
@@ -1796,7 +1408,6 @@ function SinglePageBookingContent() {
       onClose={() => setShowSuccessModal(false)}
       customerEmail={bookedCustomerEmail}
       leadId={leadId}
-      quoteId={quoteId}
       selectedService={formData.selectedScope?.Name}
       selectedDate={selectedDate}
       selectedTime={selectedTime}
@@ -1812,8 +1423,10 @@ function SinglePageBookingContent() {
  */
 export function SinglePageBookingFlow() {
   return (
-    <BookingProvider>
-      <SinglePageBookingContent />
-    </BookingProvider>
+    <AuthenticationProvider>
+      <BookingProvider>
+        <SinglePageBookingContent />
+      </BookingProvider>
+    </AuthenticationProvider>
   )
 }

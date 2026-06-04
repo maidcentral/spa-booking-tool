@@ -6,7 +6,7 @@ import { ShoppingCart, Clock, MapPin, Calendar } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
 import { Button } from "@/app/components/ui/button"
 import { formatCurrency } from "@/app/lib/utils"
-import { BookingPricing, LineItem } from "@/app/types/booking"
+import { BookingPricing } from "@/app/types/booking"
 
 interface PricingSummaryProps {
   pricing: BookingPricing
@@ -15,7 +15,6 @@ interface PricingSummaryProps {
   selectedTime?: string
   zipCode?: string
   onCheckout?: () => void
-  isSticky?: boolean
   isPricingLoading?: boolean
 }
 
@@ -26,11 +25,8 @@ export const PricingSummary = memo(function PricingSummary({
   selectedTime,
   zipCode,
   onCheckout,
-  isSticky = true,
-  isPricingLoading = false
+  isPricingLoading = false,
 }: PricingSummaryProps) {
-  // Sticky behavior is now handled by the parent container in BookingLayout
-  
   return (
     <div>
       <Card className="shadow-lg border-[var(--text-color)]/50">

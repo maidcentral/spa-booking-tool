@@ -2,16 +2,10 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useMemo } from "react"
 import { BookingFormData, BookingContextType, BookingStep, BookingPricing, LineItem } from "@/app/types/booking"
-import { mockFrequencyOptions } from "@/app/lib/mockData"
 import { bookingDataService, PriceCalculationRequest, PriceCalculationResponse, PriceCalculationResult, QuestionData, Question } from "@/app/services/api/booking-data"
 
-// Initial booking data
 const initialBookingData: BookingFormData = {
-  pricingParameters: {},
   zipCode: "",
-  selectedExtras: [],
-  frequency: mockFrequencyOptions[0], // One-time as default
-  customFields: {},
   customer: {
     firstName: "",
     lastName: "",
@@ -37,6 +31,7 @@ const initialBookingData: BookingFormData = {
     fees: 0,
     taxes: 0,
     total: 0,
+    baseFee: 0,
   },
 }
 
@@ -205,71 +200,31 @@ const processApiResponseToLineItems = (response: PriceCalculationResponse): Book
   }
 
   const frequency = result.Frequencies[0];
-  
-  
-  const lineItems: LineItem[] = [];
-  
-  // Key pricing values from API with fallbacks
-  const baseCalculatedCost = frequency.CalculatedBaseCost || 0;
-  const finalAdjustedCost = frequency.AdjustedBaseCost || frequency.CalculatedBaseCost || 0;
-  
-  // Try multiple fields for final total, with manual calculation as fallback
-  let finalTotalCost = frequency.TotalRecurringCost || frequency.TotalFirstJobCost || frequency.AdjustedBaseCost;
-  
 
-  // Add base service line item (using the raw calculated cost)
-  lineItems.push({
+  // AdjustedBaseCost is the post-modification price the customer sees.
+  // CalculatedBaseCost is the pre-modification value sent as BaseFee on BookQuote.
+  const adjustedCost = frequency.AdjustedBaseCost ?? frequency.CalculatedBaseCost ?? 0;
+  const baseFee = frequency.CalculatedBaseCost ?? 0;
+
+  const lineItems: LineItem[] = [{
     id: 'base-service',
     name: result.ScopeName || 'Service',
     description: frequency.FrequencyName,
     quantity: 1,
-    unitPrice: baseCalculatedCost,
-    totalPrice: baseCalculatedCost,
+    unitPrice: adjustedCost,
+    totalPrice: adjustedCost,
     type: 'service'
-  });
+  }];
 
-  // Add rate modifications as separate line items
-  frequency.RateModifications.forEach(modification => {
-    lineItems.push({
-      id: `modification-${modification.RateModificationId}`,
-      name: modification.Name,
-      description: modification.IsRecurring ? 'Recurring adjustment' : 'One-time adjustment',
-      quantity: modification.Quantity,
-      unitPrice: modification.CalculatedCost,
-      totalPrice: modification.CalculatedCost,
-      type: modification.CalculatedCost < 0 ? 'discount' : 'fee'
-    });
-  });
-
-  // Calculate discounts and fees from rate modifications only
-  const rateModDiscounts = frequency.RateModifications
-    .filter(mod => mod.CalculatedCost < 0)
-    .reduce((sum, mod) => sum + Math.abs(mod.CalculatedCost), 0);
-
-  const rateModFees = frequency.RateModifications
-    .filter(mod => mod.CalculatedCost > 0)
-    .reduce((sum, mod) => sum + mod.CalculatedCost, 0);
-
-  // Use rate modification totals directly (no automatic adjustments)
-  const totalDiscounts = rateModDiscounts;
-  const totalFees = rateModFees;
-
-  // Always calculate total from line items to ensure accuracy
-  const calculatedTotal = lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
-  
-  // Use calculated total from line items instead of API total fields
-  finalTotalCost = calculatedTotal;
-
-  const pricingResult = {
+  return {
     lineItems,
-    subtotal: baseCalculatedCost,           // Base calculation
-    discounts: totalDiscounts,              // All discounts from rate modifications
-    fees: totalFees,                        // All fees from rate modifications
-    taxes: 0,                               // API doesn't include taxes separately
-    total: finalTotalCost                   // Total calculated from sum of all line items
+    subtotal: adjustedCost,
+    discounts: 0,
+    fees: 0,
+    taxes: 0,
+    total: adjustedCost,
+    baseFee,
   };
-  
-  return pricingResult;
 };
 
 // Fallback pricing calculation (when API is not available)
@@ -282,6 +237,7 @@ const calculateFallbackPricing = (formData: BookingFormData): BookingPricing => 
     fees: 0,
     taxes: 0,
     total: 0,
+    baseFee: 0,
   }
 }
 

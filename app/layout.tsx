@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { BookingLayoutProvider } from "./contexts/BookingLayoutContext";
 
 
 export const metadata: Metadata = {
@@ -22,7 +23,9 @@ export default function RootLayout({
       </head>
       <body style={{ fontFamily: "'Poppins', Arial, Helvetica, sans-serif" }}>
         <ThemeProvider>
-          {children}
+          <BookingLayoutProvider>
+            {children}
+          </BookingLayoutProvider>
         </ThemeProvider>
       </body>
     </html>

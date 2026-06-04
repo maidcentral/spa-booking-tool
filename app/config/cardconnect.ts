@@ -1,26 +1,36 @@
 /**
- * CardConnect Configuration
- * Environment-specific settings for CardConnect Hosted iFrame Tokenizer
+ * CardConnect configuration.
+ *
+ * Environment is controlled by `NEXT_PUBLIC_CARDCONNECT_ENV`:
+ *   - `uat` (default)  → https://fts-uat.cardconnect.com — test cards only, no charges.
+ *   - `production`     → https://fts.cardconnect.com — real transactions.
+ *
+ * Default is `uat` so a fresh clone never accidentally hits production.
  */
 
 import { getCardConnectCSS } from './cardconnect-styles'
 
+export type CardConnectEnvironment = 'uat' | 'production'
+
 export interface CardConnectConfig {
-  environment: 'uat' | 'production'
+  environment: CardConnectEnvironment
   iframeUrl: string
   merchantId?: string
   description: string
 }
 
-// Environment detection
-const isProduction = process.env.NODE_ENV === 'production'
-const forceUAT = process.env.NEXT_PUBLIC_CARDCONNECT_FORCE_UAT === 'true'
-
-// Determine environment
-const getEnvironment = (): 'uat' | 'production' => {
-  if (forceUAT) return 'uat'
-  return isProduction ? 'production' : 'uat'
+const CARDCONNECT_HOSTS: Record<CardConnectEnvironment, string> = {
+  uat: 'https://fts-uat.cardconnect.com',
+  production: 'https://fts.cardconnect.com',
 }
+
+const getEnvironment = (): CardConnectEnvironment => {
+  const raw = process.env.NEXT_PUBLIC_CARDCONNECT_ENV?.toLowerCase().trim()
+  return raw === 'production' ? 'production' : 'uat'
+}
+
+const getHost = (env: CardConnectEnvironment = getEnvironment()): string =>
+  CARDCONNECT_HOSTS[env]
 
 // Detect mobile device for responsive layout
 const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
@@ -63,21 +73,19 @@ const getTokenizerParams = (options?: { mobile?: boolean; useCSS?: boolean }) =>
 // Default params for server-side rendering
 const defaultParams = getTokenizerParams({ mobile: false })
 
-// Configuration by environment
-const configs: Record<'uat' | 'production', CardConnectConfig> = {
+const configs: Record<CardConnectEnvironment, CardConnectConfig> = {
   uat: {
     environment: 'uat',
-    iframeUrl: `https://fts-uat.cardconnect.com/itoke/ajax-tokenizer.html?${defaultParams}`,
-    description: 'UAT Environment - Use test cards only'
+    iframeUrl: `${CARDCONNECT_HOSTS.uat}/itoke/ajax-tokenizer.html?${defaultParams}`,
+    description: 'UAT Environment - Use test cards only',
   },
   production: {
     environment: 'production',
-    iframeUrl: `https://fts.cardconnect.com/itoke/ajax-tokenizer.html?${defaultParams}`,
-    description: 'Production Environment - Real transactions'
-  }
+    iframeUrl: `${CARDCONNECT_HOSTS.production}/itoke/ajax-tokenizer.html?${defaultParams}`,
+    description: 'Production Environment - Real transactions',
+  },
 }
 
-// Export current configuration
 export const cardConnectConfig: CardConnectConfig = configs[getEnvironment()]
 
 // Test card information for UAT environment
@@ -108,11 +116,8 @@ export const isProductionEnvironment = () => cardConnectConfig.environment === '
 export const getIframeUrl = () => cardConnectConfig.iframeUrl
 export const getEnvironmentDescription = () => cardConnectConfig.description
 
-// Dynamic URL builder for responsive layouts
 export const buildTokenizerUrl = (options?: { mobile?: boolean; useCSS?: boolean }) => {
-  const baseUrl = isUATEnvironment()
-    ? 'https://fts-uat.cardconnect.com/itoke/ajax-tokenizer.html'
-    : 'https://fts.cardconnect.com/itoke/ajax-tokenizer.html'
+  const baseUrl = `${getHost()}/itoke/ajax-tokenizer.html`
   const params = getTokenizerParams(options)
   return `${baseUrl}?${params}`
 }

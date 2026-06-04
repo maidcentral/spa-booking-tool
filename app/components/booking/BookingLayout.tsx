@@ -71,7 +71,6 @@ export function BookingLayout({
                 selectedTime={selectedTime}
                 zipCode={zipCode}
                 onCheckout={onCheckout}
-                isSticky={true}
                 isPricingLoading={isPricingLoading}
               />
             </motion.div>

@@ -3,13 +3,7 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
 import { CreditCard } from "lucide-react"
-import { cardConnectConfig, isUATEnvironment, testCards, buildTokenizerUrl } from "@/app/config/cardconnect"
-
-interface TokenizationResponse {
-  message: string  // The token
-  expiry?: string  // MMYY format
-  error?: string   // Error message if tokenization fails
-}
+import { buildTokenizerUrl } from "@/app/config/cardconnect"
 
 interface CardConnectTokenizerProps {
   onTokenReceived: (token: string, expiry: string) => void
@@ -41,35 +35,20 @@ export function CardConnectTokenizer({
         "https://fts.cardconnect.com"
       ]
 
-      if (!allowedOrigins.includes(event.origin)) {
-        // Unauthorized origin detected
-        return
-      }
+      if (!allowedOrigins.includes(event.origin)) return
 
       try {
-        // Simplified parsing per official docs
         const token = JSON.parse(event.data)
-
         if (token.message) {
-          // Clear any previous errors
           setTokenizationError(null)
-
-          // Update payment token state
           setPaymentToken(token.message)
 
-          // Update hidden input field per official docs
           const hiddenInput = document.getElementById('mytoken') as HTMLInputElement
-          if (hiddenInput) {
-            hiddenInput.value = token.message
-          }
+          if (hiddenInput) hiddenInput.value = token.message
 
-          // Token received successfully
-
-          // Call callback with token and expiry
           onTokenReceived(token.message, token.expiry || "")
         }
-      } catch (error) {
-        // Error parsing tokenization response
+      } catch {
         const errorMessage = "Tokenization failed"
         setTokenizationError(errorMessage)
         onError(errorMessage)
@@ -87,7 +66,6 @@ export function CardConnectTokenizer({
 
   const handleIframeLoad = () => {
     setIsLoading(false)
-    // CardConnect iFrame loaded successfully
   }
 
   const handleIframeError = () => {
@@ -95,12 +73,6 @@ export function CardConnectTokenizer({
     const errorMessage = "Failed to load payment form"
     setTokenizationError(errorMessage)
     onError(errorMessage)
-  }
-
-  // Utility function to get token from hidden input (per official docs)
-  const getTokenFromForm = (): string | null => {
-    const hiddenInput = document.getElementById('mytoken') as HTMLInputElement
-    return hiddenInput?.value || null
   }
 
   return (

@@ -1,12 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { API_BASE_URL } from '@/app/lib/config/api-url';
 
 /**
- * Server-side API route for secure authentication with MaidCentral
- * Keeps API credentials on the server and returns only the access token
+ * Server-side authentication route. Exchanges API_USERNAME / API_KEY (which
+ * are kept server-only) for a MaidCentral bearer token, and returns just the
+ * token to the client. The credentials never reach the browser.
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    // Get API credentials from environment variables (server-side only)
     const apiUsername = process.env.API_USERNAME?.trim();
     const apiKey = process.env.API_KEY?.trim();
 
@@ -17,25 +18,21 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Call MaidCentral token endpoint with API credentials
-    const tokenEndpoint = 'https://mccleaners.maidcentral.net/token';
-    
-    // The MaidCentral token endpoint requires credentials in form-data format
+    // The /token endpoint expects an OAuth2 password-grant, form-urlencoded body.
     const formData = new URLSearchParams();
-    formData.append('username', apiUsername);  // API_USERNAME from .env
-    formData.append('password', apiKey);        // API_KEY from .env
-    formData.append('grant_type', 'password');  // Required by OAuth2 standard
-    
-    const response = await fetch(tokenEndpoint, {
+    formData.append('username', apiUsername);
+    formData.append('password', apiKey);
+    formData.append('grant_type', 'password');
+
+    const response = await fetch(`${API_BASE_URL}/token`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData,
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      // Surface the upstream status without leaking the body, which can
+      // contain credential-shaped error detail.
       return NextResponse.json(
         { error: `Authentication failed: ${response.status}` },
         { status: response.status }
@@ -51,18 +48,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Return only the access token to the client
     return NextResponse.json({
       success: true,
       token: data.access_token,
-      // Optionally include token expiry if provided
-      expires_in: data.expires_in
+      expires_in: data.expires_in,
     });
-
-  } catch (error: any) {
-    return NextResponse.json(
-      { error: `Server error: ${error.message || 'Unknown error occurred'}` },
-      { status: 500 }
-    );
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error occurred';
+    return NextResponse.json({ error: `Server error: ${message}` }, { status: 500 });
   }
 }

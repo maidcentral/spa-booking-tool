@@ -1,8 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { Card, CardContent } from '@/app/components/ui/card';
-import { authManager } from '@/app/lib/authManager';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -30,63 +29,60 @@ export function AuthenticationProvider({ children }: AuthenticationProviderProps
     token: null,
   });
 
-  const authenticate = async () => {
+  // Use a ref instead of state for the in-flight guard so the authenticate
+  // callback's identity stays stable across renders.
+  const hasInitializedRef = useRef(false);
+
+  const authenticate = useCallback(async () => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
 
     try {
-      setAuthState(prev => ({
-        ...prev,
-        isLoading: true,
-        error: null
-      }));
+      setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
 
-      // Use the global auth manager instead of direct fetch
-      const result = await authManager.authenticate();
+      const response = await fetch('/api/auth', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json();
 
-      if (result.success && result.token) {
+      if (!response.ok) {
+        throw new Error(data.error || `Authentication failed with status ${response.status}`);
+      }
+
+      if (data.success && data.token) {
         setAuthState({
           isAuthenticated: true,
           isLoading: false,
           error: null,
-          token: result.token,
+          token: data.token,
         });
       } else {
-        setAuthState({
-          isAuthenticated: false,
-          isLoading: false,
-          error: result.error || 'Authentication failed',
-          token: null,
-        });
+        throw new Error('Invalid response from authentication server');
       }
-
-    } catch (error: any) {
+    } catch (error: unknown) {
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
-        error: error.message || 'Failed to authenticate with MaidCentral',
+        error: error instanceof Error ? error.message : 'Failed to authenticate with MaidCentral',
         token: null,
       });
     }
-  };
+  }, []);
 
-  const logout = () => {
-    // Clear the global auth manager cache
-    authManager.clearToken();
-    setAuthState({
-      isAuthenticated: false,
-      isLoading: false,
-      error: null,
-      token: null,
-    });
-  };
+  const logout = useCallback(() => {
+    hasInitializedRef.current = false;
+    setAuthState({ isAuthenticated: false, isLoading: false, error: null, token: null });
+  }, []);
 
-  const retry = () => {
+  const retry = useCallback(() => {
+    hasInitializedRef.current = false;
     authenticate();
-  };
+  }, [authenticate]);
 
-  // Automatically authenticate on mount
   useEffect(() => {
     authenticate();
-  }, []);
+  }, [authenticate]);
 
   const contextValue: AuthContextType = {
     ...authState,

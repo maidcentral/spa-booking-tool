@@ -1,3 +1,0 @@
-# Spec Summary (Lite)
-
-Implement a dynamic theming system that allows MaidCentral partners to customize the booking widget's colors through URL parameters passed to the iframe. Partners can specify hex colors for primary (buttons/highlights), foreground (card backgrounds), and background elements via URL parameters, enabling brand consistency across different partner websites without requiring separate deployments. The system will parse URL parameters on load, validate hex color codes, apply them throughout the widget interface, and gracefully fall back to defaults for invalid or missing values.

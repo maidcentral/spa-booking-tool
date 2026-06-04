@@ -4,194 +4,122 @@ import type {
   CustomerSource,
   LeadTag,
   QuoteCreateRequest,
-  QuoteCreateResponse
-} from '@/app/types/api/lead'
+  QuoteCreateResponse,
+} from '@/app/types/api/lead';
 
 import { fetchMaidCentralAPI, parseAPIResponse } from './fetch-utils';
+import { API_BASE_URL } from '@/app/lib/config/api-url';
 
 /**
- * Lead API Service
- * Handles lead creation and management with MaidCentral API
+ * Lead + quote API calls.
+ *
+ * `createOrUpdate` hits `POST /api/Lead/CreateOrUpdate` to create or update a
+ * lead record; the returned `Result.LeadId` is then passed to the quote endpoint.
+ *
+ * `createOrUpdateQuote` hits `POST /api/Lead/CreateOrUpdateQuote` to attach a
+ * priced quote (scopes, frequencies, questions, payment token) to a lead. The
+ * returned `Result.QuoteId` is what `BookQuote` later confirms.
  */
 export const leadService = {
-  /**
-   * Create or update a lead
-   * @param token Authentication token
-   * @param data Lead creation data
-   * @returns Promise with lead creation response
-   */
   async createOrUpdate(token: string, data: LeadCreateRequest): Promise<LeadCreateResponse> {
     try {
       if (!token) {
         throw new Error('No authentication token provided');
       }
 
-      // Default values for optional fields
       const requestData: LeadCreateRequest = {
         SendLeadEmail: true,
         AddToCampaigns: true,
         TriggerWebhook: true,
         AllowDuplicates: false,
-        ...data
-      }
-
-      const serializedData = JSON.stringify(requestData);
+        ...data,
+      };
 
       const response = await fetchMaidCentralAPI('/api/Lead/CreateOrUpdate', token, {
         method: 'POST',
-        body: serializedData,
-        timeout: 15000 // 15 second timeout for lead creation
+        body: JSON.stringify(requestData),
+        timeout: 15000,
       });
 
-      const responseData = await parseAPIResponse<LeadCreateResponse>(response, 'Lead CreateOrUpdate');
-
-      return responseData;
-
+      return await parseAPIResponse<LeadCreateResponse>(response, 'Lead CreateOrUpdate');
     } catch (error: any) {
-
-      // Return error response
       return {
         IsSuccess: false,
-        ErrorMessage: error.message || 'Failed to create lead'
-      }
+        ErrorMessage: error.message || 'Failed to create lead',
+      };
     }
   },
 
-  /**
-   * Get available customer sources
-   * @param token Authentication token
-   * @returns Promise with list of customer sources
-   */
   async getCustomerSources(token: string): Promise<CustomerSource[]> {
-    try {
-      if (!token) {
-        throw new Error('No authentication token provided');
-      }
-
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json'
-      };
-
-      const endpoint = 'https://mccleaners.maidcentral.net/api/Lead/CustomerSources';
-
-      const response = await fetch(endpoint, {
-        method: 'GET',
-        headers,
-        credentials: 'omit'
-      });
-
-      if (!response.ok) {
-        throw new Error(`Customer sources API failed with status ${response.status}`);
-      }
-
-      const data: CustomerSource[] = await response.json();
-      return data;
-
-    } catch (error) {
-      // Failed to fetch customer sources
-      return [];
+    if (!token) {
+      throw new Error('No authentication token provided');
     }
+
+    const response = await fetch(`${API_BASE_URL}/api/Lead/CustomerSources`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+      },
+      credentials: 'omit',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Customer sources API failed with status ${response.status}`);
+    }
+
+    return (await response.json()) as CustomerSource[];
   },
 
-  /**
-   * Get available lead tags
-   * @param token Authentication token
-   * @returns Promise with list of lead tags (category 8)
-   */
   async getLeadTags(token: string): Promise<LeadTag[]> {
-    try {
-      if (!token) {
-        throw new Error('No authentication token provided');
-      }
-
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json'
-      };
-
-      const endpoint = 'https://mccleaners.maidcentral.net/api/Lead/Tags';
-
-      const response = await fetch(endpoint, {
-        method: 'GET',
-        headers,
-        credentials: 'omit'
-      });
-
-      if (!response.ok) {
-        throw new Error(`Lead tags API failed with status ${response.status}`);
-      }
-
-      const data: LeadTag[] = await response.json();
-      // Filter for category 8 tags as specified in API docs
-      return data.filter(tag => tag.CategoryId === 8);
-
-    } catch (error) {
-      // Failed to fetch lead tags
-      return [];
+    if (!token) {
+      throw new Error('No authentication token provided');
     }
+
+    const response = await fetch(`${API_BASE_URL}/api/Lead/Tags`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+      },
+      credentials: 'omit',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Lead tags API failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as LeadTag[];
+    // Filter for category 8 tags per MaidCentral API convention.
+    return data.filter((tag) => tag.CategoryId === 8);
   },
 
-  /**
-   * Create or update a quote for a lead
-   * @param token Authentication token
-   * @param data Quote creation data
-   * @returns Promise with quote creation response
-   */
   async createOrUpdateQuote(token: string, data: QuoteCreateRequest): Promise<QuoteCreateResponse> {
-    console.time('createOrUpdateQuote');
-    // Creating or updating quote
-
     try {
       if (!token) {
         throw new Error('No authentication token provided');
       }
 
-      // Default values for optional fields
       const requestData: QuoteCreateRequest = {
-        SendQuoteEmail: false, // Don't send immediately
+        SendQuoteEmail: false,
         AddToCampaigns: true,
         TriggerWebhook: true,
-        ...data
+        ...data,
       };
 
-      // Preparing quote request
-
-      console.time('🌐 Quote API call');
-      const apiStart = performance.now();
-
-      // Use fetchMaidCentralAPI for optimized performance
       const response = await fetchMaidCentralAPI('/api/Lead/CreateOrUpdateQuote', token, {
         method: 'POST',
         body: JSON.stringify(requestData),
-        timeout: 30000, // 30 second timeout
-        retries: 0 // No retries to avoid confusion
+        timeout: 30000,
+        retries: 0,
       });
 
-      const apiEnd = performance.now();
-      console.timeEnd('🌐 Quote API call');
-      // Quote API call completed
-
-      console.time('🔍 Response parsing');
-      const responseData = await parseAPIResponse<QuoteCreateResponse>(response, 'Quote CreateOrUpdate');
-      console.timeEnd('🔍 Response parsing');
-
-      console.timeEnd('createOrUpdateQuote');
-      // Quote API response received
-      return responseData;
-
+      return await parseAPIResponse<QuoteCreateResponse>(response, 'Quote CreateOrUpdate');
     } catch (error: any) {
-      // Exception in createOrUpdateQuote
-      console.error('Exception in createOrUpdateQuote', {
-        message: error.message,
-        stack: error.stack
-      });
-
-      // Return error response
       return {
         IsSuccess: false,
-        ErrorMessage: error.message || 'Failed to create quote'
+        ErrorMessage: error.message || 'Failed to create quote',
       };
     }
-  }
-}
+  },
+};
